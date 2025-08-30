@@ -1,0 +1,56 @@
+{
+  "Comment": "Terraform Plan/Apply summarization & policy & Slack",
+  "StartAt": "RouteManifest",
+  "States": {
+    "RouteManifest": {
+      "Type": "Task",
+      "Resource": "arn:aws:lambda:REGION:ACCOUNT:function:ManifestRouter",
+      "ResultPath": "$",
+      "Next": "CheckPRStatus"
+    },
+    "CheckPRStatus": {
+      "Type": "Task",
+      "Resource": "arn:aws:lambda:REGION:ACCOUNT:function:PRChecker",
+      "ResultPath": "$",
+      "Next": "HasChangesChoice"
+    },
+    "HasChangesChoice": {
+      "Type": "Choice",
+      "Choices": [
+        { "Variable": "$.proceed", "BooleanEquals": false, "Next": "NotifyOnly" },
+        {
+          "And": [
+            { "Variable": "$.manifest.action", "StringEquals": "plan" },
+            { "Not": { "Variable": "$.manifest.has_changes", "BooleanEquals": true } }
+          ],
+          "Next": "NotifyOnly"
+        }
+      ],
+      "Default": "SummarizePlan"
+    },
+    "SummarizePlan": {
+      "Type": "Task",
+      "Resource": "arn:aws:lambda:REGION:ACCOUNT:function:Summary",
+      "ResultPath": "$",
+      "Next": "PolicyEval"
+    },
+    "PolicyEval": {
+      "Type": "Task",
+      "Resource": "arn:aws:lambda:REGION:ACCOUNT:function:PolicyEval",
+      "ResultPath": "$",
+      "Next": "Notify"
+    },
+    "Notify": {
+      "Type": "Task",
+      "Resource": "arn:aws:lambda:REGION:ACCOUNT:function:SlackNotifier",
+      "ResultPath": "$",
+      "End": true
+    },
+    "NotifyOnly": {
+      "Type": "Task",
+      "Resource": "arn:aws:lambda:REGION:ACCOUNT:function:SlackNotifier",
+      "ResultPath": "$",
+      "End": true
+    }
+  }
+}

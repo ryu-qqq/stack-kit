@@ -1,0 +1,130 @@
+version: 3
+
+# 여러 프로젝트를 병렬로 플랜/적용 가능
+parallel_plan: true
+parallel_apply: true
+
+# === 프로젝트 목록 ===
+projects:
+  # 예시 1) shared/prod 스택
+  - name: shared-prod
+    dir: terraform/stacks/shared/prod
+    workflow: stackkit-prod
+    autoplan:
+      enabled: true
+      when_modified: ["**/*.tf", "**/*.tfvars", "../../../modules/**"]
+    terraform_version: v1.8.5
+
+  # 예시 2) messaging/dev 스택
+  - name: messaging-dev
+    dir: terraform/stacks/messaging/dev
+    workflow: stackkit-dev
+    autoplan:
+      enabled: true
+      when_modified: ["**/*.tf", "**/*.tfvars", "../../../modules/**"]
+    terraform_version: v1.8.5
+
+# === 공통/환경별 워크플로 ===
+workflows:
+  # dev 환경: -var-file dev.tfvars
+  stackkit-dev:
+    plan:
+      steps:
+        - init
+        - plan:
+            # 내장 plan + -var-file 추가 (내장 plan은 자동으로 -out $PLANFILE을 사용)
+            extra_args: ["-input=false", "-var-file", "dev.tfvars"]
+        - run: |
+            set -euo pipefail
+            # 1) 플랜을 JSON/텍스트로 덤프
+            terraform show -json "$PLANFILE" > tfplan.json
+            terraform show "$PLANFILE" > plan.txt
+            # 2) 업로드 경로 구성
+            BUCKET="${PLAN_BUCKET:-plan-artifacts}"
+            PREFIX="${BASE_REPO_OWNER}/${BASE_REPO_NAME}/${PULL_NUM}/${PROJECT_NAME:-$(basename "$REPO_REL_DIR" | tr '/' '-')}"
+            # 3) 변경 유무(리소스 변화 여부) 계산
+            HAS_CHANGES=$(jq '(.resource_changes|length) > 0' tfplan.json)
+            # 4) 메타(manifest) 생성
+            jq -n --arg repo "${BASE_REPO_OWNER}/${BASE_REPO_NAME}" \
+                  --arg pr "$PULL_NUM" \
+                  --arg proj "$PROJECT_NAME" \
+                  --arg action "plan" \
+                  --arg status "success" \
+                  --arg commit "$HEAD_COMMIT" \
+                  --argjson has "$HAS_CHANGES" \
+                  '{repo:$repo,pr:($pr|tonumber),project:$proj,action:$action,status:$status,commit:$commit,has_changes:$has}' \
+              > manifest.json
+            # 5) S3 업로드
+            aws s3 cp "$PLANFILE"      "s3://$BUCKET/$PREFIX/tfplan.bin"
+            aws s3 cp tfplan.json      "s3://$BUCKET/$PREFIX/tfplan.json"
+            aws s3 cp plan.txt         "s3://$BUCKET/$PREFIX/plan.txt"
+            aws s3 cp manifest.json    "s3://$BUCKET/$PREFIX/manifest.json"
+    apply:
+      steps:
+        # 내장 apply 대신 커스텀 실행(로그 파일 보존)
+        - run: |
+            set +e
+            terraform apply -input=false -no-color "$PLANFILE" | tee apply.txt
+            STATUS=$?
+            set -e
+            BUCKET="${PLAN_BUCKET:-plan-artifacts}"
+            PREFIX="${BASE_REPO_OWNER}/${BASE_REPO_NAME}/${PULL_NUM}/${PROJECT_NAME:-$(basename "$REPO_REL_DIR" | tr '/' '-')}"
+            jq -n --arg repo "${BASE_REPO_OWNER}/${BASE_REPO_NAME}" \
+                  --arg pr "$PULL_NUM" \
+                  --arg proj "$PROJECT_NAME" \
+                  --arg action "apply" \
+                  --arg status "$([ $STATUS -eq 0 ] && echo success || echo failure)" \
+                  --arg commit "$HEAD_COMMIT" \
+                  '{repo:$repo,pr:($pr|tonumber),project:$proj,action:$action,status:$status,commit:$commit}' \
+              > manifest.json
+            aws s3 cp apply.txt      "s3://$BUCKET/$PREFIX/apply.txt"
+            aws s3 cp manifest.json  "s3://$BUCKET/$PREFIX/manifest.json"
+            exit $STATUS
+
+  # prod 환경: -var-file prod.tfvars
+  stackkit-prod:
+    plan:
+      steps:
+        - init
+        - plan:
+            extra_args: ["-input=false", "-var-file", "prod.tfvars"]
+        - run: |
+            set -euo pipefail
+            terraform show -json "$PLANFILE" > tfplan.json
+            terraform show "$PLANFILE" > plan.txt
+            BUCKET="${PLAN_BUCKET:-plan-artifacts}"
+            PREFIX="${BASE_REPO_OWNER}/${BASE_REPO_NAME}/${PULL_NUM}/${PROJECT_NAME:-$(basename "$REPO_REL_DIR" | tr '/' '-')}"
+            HAS_CHANGES=$(jq '(.resource_changes|length) > 0' tfplan.json)
+            jq -n --arg repo "${BASE_REPO_OWNER}/${BASE_REPO_NAME}" \
+                  --arg pr "$PULL_NUM" \
+                  --arg proj "$PROJECT_NAME" \
+                  --arg action "plan" \
+                  --arg status "success" \
+                  --arg commit "$HEAD_COMMIT" \
+                  --argjson has "$HAS_CHANGES" \
+                  '{repo:$repo,pr:($pr|tonumber),project:$proj,action:$action,status:$status,commit:$commit,has_changes:$has}' \
+              > manifest.json
+            aws s3 cp "$PLANFILE"      "s3://$BUCKET/$PREFIX/tfplan.bin"
+            aws s3 cp tfplan.json      "s3://$BUCKET/$PREFIX/tfplan.json"
+            aws s3 cp plan.txt         "s3://$BUCKET/$PREFIX/plan.txt"
+            aws s3 cp manifest.json    "s3://$BUCKET/$PREFIX/manifest.json"
+    apply:
+      steps:
+        - run: |
+            set +e
+            terraform apply -input=false -no-color "$PLANFILE" | tee apply.txt
+            STATUS=$?
+            set -e
+            BUCKET="${PLAN_BUCKET:-plan-artifacts}"
+            PREFIX="${BASE_REPO_OWNER}/${BASE_REPO_NAME}/${PULL_NUM}/${PROJECT_NAME:-$(basename "$REPO_REL_DIR" | tr '/' '-')}"
+            jq -n --arg repo "${BASE_REPO_OWNER}/${BASE_REPO_NAME}" \
+                  --arg pr "$PULL_NUM" \
+                  --arg proj "$PROJECT_NAME" \
+                  --arg action "apply" \
+                  --arg status "$([ $STATUS -eq 0 ] && echo success || echo failure)" \
+                  --arg commit "$HEAD_COMMIT" \
+                  '{repo:$repo,pr:($pr|tonumber),project:$proj,action:$action,status:$status,commit:$commit}' \
+              > manifest.json
+            aws s3 cp apply.txt      "s3://$BUCKET/$PREFIX/apply.txt"
+            aws s3 cp manifest.json  "s3://$BUCKET/$PREFIX/manifest.json"
+            exit $STATUS
