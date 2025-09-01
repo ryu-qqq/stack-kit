@@ -11,73 +11,155 @@
 - **📊 비용 최적화**: 환경별 리소스 크기 자동 조정
 - **🛡️ 보안 검증**: 자동화된 보안 정책 검사
 
-## 🤖 AI-Powered 리뷰 시스템 (선택사항)
+## 🤖 중앙 집중식 Atlantis + AI 리뷰어 (권장 ⭐)
 
-- **AI 코드 리뷰**: OpenAI GPT-4로 Terraform Plan/Apply 자동 분석
-- **🔄 Atlantis 워크플로우**: PR 기반 인프라 변경 관리
-- **중앙 집중식 관리**: 한 번 구축하면 여러 프로젝트에서 공유 사용
+- **🏗️ 중앙 관리**: 단일 Atlantis 서버로 모든 프로젝트 레포 관리
+- **🤖 AI 코드 리뷰**: OpenAI GPT-4로 Terraform Plan/Apply 자동 분석
+- **📊 PR 기반 검증**: Pull Request마다 인프라 변경사항 자동 검토
+- **💰 비용 효율성**: 인프라 중복 없이 모든 프로젝트에 AI 리뷰 적용
 
 ---
 
 ## 🚀 5분 빠른 시작
 
-### 방법 1: 기존 프로젝트에 Terraform 모듈만 설치 (권장 ⭐)
+### 방법 1: 기존 프로젝트에 Terraform 모듈만 설치
 
 ```bash
-# 기존 Spring/React 프로젝트 디렉토리로 이동
+# 기존 프로젝트 디렉토리로 이동
 cd your-existing-project
 
 # StackKit Terraform 모듈만 설치
-curl -sSL https://raw.githubusercontent.com/your-org/stackkit/main/scripts/stackkit-init.sh | bash
+./scripts/stackkit-init.sh -n my-project -t web-app
 
 # 인프라 배포
-cd terraform
-terraform init
-terraform plan
-terraform apply
+make init-dev
+make apply-dev
 ```
 
 **결과 구조:**
 ```
-your-spring-project/          # 기존 프로젝트 유지
-├── src/main/java/           # 기존 Spring 코드
-├── terraform/               # StackKit 모듈 (새로 추가)
-│   ├── modules/            # AWS 리소스 모듈
-│   └── scripts/            # 배포 스크립트
-└── scripts/                # 설치 스크립트
+your-project/                # 기존 프로젝트 유지
+├── src/                    # 기존 애플리케이션 코드
+├── terraform/              # StackKit 모듈 (새로 추가)
+│   ├── modules/           # AWS 서비스 모듈
+│   └── environments/      # 환경별 설정
+├── .github/workflows/     # CI/CD 파이프라인
+└── Makefile              # 배포 명령어
 ```
 
-### 방법 2: AI 리뷰어 구축 (선택사항, 한 번만 구축)
+### 방법 2: 중앙 Atlantis + 프로젝트 레포 연동 (권장 ⭐)
 
-AI 리뷰 기능을 원하는 경우에만 별도로 구축:
+**Step 1: 중앙 Atlantis + AI 리뷰어 구축** (최초 1회)
+```bash
+# atlantis-infrastructure 전용 레포에서 실행
+git clone https://github.com/yourorg/atlantis-infrastructure.git
+cd atlantis-infrastructure
+
+# 중앙 Atlantis + AI 리뷰어 구축
+./scripts/setup-atlantis-central.sh \
+  -o mycompany \
+  -g ghp_your-github-token \
+  -k sk-your-openai-key \
+  -s https://hooks.slack.com/your-webhook \
+  -a "github.com/myorg/*"
+```
+
+**Step 2: 각 프로젝트 레포에서 연동**
+```bash
+# 각 프로젝트 레포에서 실행
+cd your-project-repo
+
+# StackKit 모듈 + Atlantis 연동 설정
+./scripts/setup-project-repo.sh \
+  -p my-web-app \
+  -t web-app \
+  -u http://atlantis.mycompany.com \
+  -b mycompany-atlantis-artifacts
+```
+
+**아키텍처:**
+```
+atlantis-infrastructure/     # 중앙 Atlantis (1개)
+└── terraform/stacks/atlantis-central-mycompany/
+    ├── main.tf             # VPC, ECS, Lambda, S3
+    └── ai-reviewer/        # AI 리뷰어 코드
+
+my-web-app/                 # 프로젝트 레포 (N개)
+├── src/                    # 애플리케이션 코드
+├── terraform/stacks/       # StackKit 모듈 사용
+└── atlantis.yaml          # 중앙 Atlantis 연동
+
+my-api-server/              # 프로젝트 레포 (N개)  
+├── src/                    # 애플리케이션 코드
+├── terraform/stacks/       # StackKit 모듈 사용
+└── atlantis.yaml          # 중앙 Atlantis 연동
+```
+
+**사용법:**
+1. **PR 생성** → 중앙 Atlantis가 자동으로 `terraform plan` 실행
+2. **AI 분석** → 중앙 AI 리뷰어가 보안, 비용, 모범사례 분석
+3. **Slack 알림** → 모든 프로젝트의 리뷰 결과를 중앙에서 관리
+4. **승인 후** → `atlantis apply` 코멘트로 배포
+
+### 두 방법의 차이점
+
+| 구분 | 방법 1: 모듈만 설치 | 방법 2: 중앙 Atlantis |
+|------|-------------------|----------------------|
+| **설치** | 5분 | 중앙: 10분, 프로젝트별: 2분 |
+| **비용** | 무료 | 월 $50-80 (모든 프로젝트 공유) |
+| **리뷰** | 수동 | AI 자동 리뷰 |
+| **관리** | 개발자 직접 관리 | 중앙 집중식 관리 |
+| **확장성** | 프로젝트별 독립 | 무제한 프로젝트 추가 |
+| **권장 용도** | 개발/테스트 환경 | 프로덕션 환경 |
+
+---
+
+### 🎯 어떤 방법을 선택해야 할까요?
+
+- **🚀 빠른 시작이 필요하다면**: 방법 1 (모듈만 설치)
+- **🏢 프로덕션에서 안전하게 관리하려면**: 방법 2 (Atlantis + AI)
+- **💰 비용을 최소화하려면**: 방법 1
+- **🤖 AI 리뷰와 자동화가 필요하다면**: 방법 2
+
+---
+
+## 🚀 GitHub Actions 워크플로우 (권장 ⭐)
+
+자동화된 Terraform 검증과 비용 추정을 위한 GitHub Actions 워크플로우 템플릿들을 제공합니다.
+
+### 📋 제공되는 워크플로우
+
+| 워크플로우 | 용도 | 포함 기능 |
+|------------|------|-----------|
+| **🔍 Complete Validation** | 프로덕션 환경 | Format, Validate, Plan, 보안 검증, 비용 추정 |
+| **📋 PR Plan & Cost** | PR 비용 분석 | Plan 실행, 상세 비용 분석, PR 코멘트 |
+| **✅ Simple Check** | 빠른 기본 검증 | Format, Validate만 (AWS 연결 불필요) |
+| **🤖 Atlantis Integration** | 중앙 Atlantis 연동 | 서버 상태 확인, 명령어 모니터링 |
+
+### ⚡ 5분 설정
 
 ```bash
-# StackKit 전체 클론
-git clone https://github.com/ryu-qqq/stackkit.git
-cd stackkit
+# 1. 워크플로우 파일 복사
+mkdir -p .github/workflows
+cp stackkit/.github/workflow-templates/terraform-validation.yml .github/workflows/
 
-# AI-Powered Atlantis 구축 (중앙 집중식, 여러 프로젝트에서 공유)
-./scripts/setup-atlantis-ai.sh
+# 2. Repository Secrets 설정 (GitHub 레포 설정에서)
+AWS_ROLE_ARN="arn:aws:iam::123456789012:role/GitHubActionsRole"
+INFRACOST_API_KEY="ico-xxxxxxxxxxxxxxxx"  # 선택사항
+
+# 3. 커밋 후 PR 생성하면 자동 검증 시작!
+git add .github/workflows/
+git commit -m "Add Terraform validation workflow"
 ```
 
-**구축 후 사용법:**
-1. **AI 리뷰어**: 한 번 구축하면 모든 프로젝트에서 공유 사용
-2. **다른 프로젝트들**: 방법 1로 Terraform 모듈만 설치
-3. **GitHub Webhook**: 각 프로젝트 Repository에 설정하여 AI 리뷰 연동
+**🎯 자동으로 수행되는 작업**:
+- ✅ Terraform 코드 검증 (Format, Validate, Plan)
+- 🛡️ 보안 정책 검사 (StackKit 검증 스크립트)
+- 💰 인프라 비용 추정 (Infracost)
+- 📊 PR에 상세 결과 코멘트 추가
+- 🚨 실패 시 자동 알림
 
-### 3. 인프라 배포
-```bash
-# 초기화
-terraform init -backend-config=backend.hcl
-
-# 검증 (선택사항)
-terraform/scripts/validate.sh my-app dev
-
-# 배포
-terraform apply
-```
-
-**🎉 완료!** 이제 AWS VPC가 생성되었습니다.
+**📚 상세 가이드**: [GitHub Actions 설정 가이드](./docs/GITHUB_ACTIONS_GUIDE.md)
 
 ---
 

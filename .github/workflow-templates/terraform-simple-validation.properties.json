@@ -1,0 +1,14 @@
+{
+    "name": "StackKit Simple Terraform Check",
+    "description": "Basic Terraform format and validation checks - lightweight and fast",
+    "iconName": "check-circle",
+    "categories": [
+        "terraform",
+        "validation",
+        "simple"
+    ],
+    "filePatterns": [
+        "terraform/**/*.tf",
+        "terraform/**/*.tfvars"  
+    ]
+}

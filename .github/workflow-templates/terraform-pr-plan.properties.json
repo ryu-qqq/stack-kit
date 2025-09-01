@@ -1,0 +1,15 @@
+{
+    "name": "StackKit PR Plan & Cost",
+    "description": "Terraform plan and cost estimation for pull requests with detailed PR comments",
+    "iconName": "calculator",
+    "categories": [
+        "terraform", 
+        "pull-requests",
+        "cost-estimation",
+        "planning"
+    ],
+    "filePatterns": [
+        "terraform/**/*.tf",
+        "terraform/**/*.tfvars"
+    ]
+}

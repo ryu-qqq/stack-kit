@@ -1,8 +1,8 @@
 # 🚀 StackKit 퀵스타트 가이드
 
-**5분만에 AWS 인프라를 구축하고 AI로 검증하세요!**
+**10분만에 중앙 집중식 Atlantis + AI 리뷰어를 구축하여 안전한 인프라 관리 시작!**
 
-이 가이드는 StackKit을 사용하여 AWS 인프라를 빠르게 구축하는 방법을 안내합니다.
+이 가이드는 중앙 Atlantis 서버 1개로 모든 프로젝트 레포지토리를 관리하며, StackKit 모듈을 재사용하는 방법을 안내합니다.
 
 ---
 
@@ -37,9 +37,9 @@ cd stackkit
 
 ---
 
-## 🏗️ 시나리오 1: 기본 인프라 구축
+## 🏗️ 방법 1: 모듈만 사용하기 (간단한 설정)
 
-가장 간단한 방법으로 AWS 인프라를 구축해보겠습니다.
+기존 프로젝트에 StackKit 모듈만 추가하여 인프라를 구축합니다.
 
 ### Step 1: 스택 생성
 ```bash
@@ -93,7 +93,47 @@ terraform apply
 
 ---
 
-## 💻 시나리오 2: 웹 애플리케이션 스택
+## 💻 방법 2: 중앙 Atlantis + 프로젝트 레포 연동 (권장)
+
+중앙 Atlantis 서버 1개가 모든 프로젝트 레포의 PR을 관리하는 효율적인 설정입니다.
+
+### Step 1: 중앙 Atlantis 구축 (최초 1회)
+```bash
+# atlantis-infrastructure 전용 레포 생성 후 실행
+./scripts/setup-atlantis-central.sh \
+    --org-name=mycompany \
+    --github-token=ghp_xxxxxxxxxxxx \
+    --slack-webhook=https://hooks.slack.com/services/... \
+    --openai-key=sk-xxxxxxxxxxxxxxxx \
+    --allowlist="github.com/myorg/*"
+```
+
+**설치 과정** (약 10분):
+- ✅ VPC, ECS, Lambda, S3 등 완전한 AWS 인프라 생성
+- ✅ Java 17 기반 AI 리뷰어 Lambda 함수 생성  
+- ✅ Atlantis 서버 ECS Fargate에 배포 (고가용성)
+- ✅ 모든 허용된 레포의 PR을 처리할 수 있도록 설정
+- ✅ 완전한 문서 및 관리 가이드 생성
+
+### Step 2: 프로젝트 레포 연동
+각 프로젝트 레포에서:
+```bash
+# StackKit 모듈 + 중앙 Atlantis 연동
+./scripts/setup-project-repo.sh \
+    --project-name=my-web-app \
+    --type=web-app \
+    --atlantis-url=http://your-atlantis-url \
+    --s3-bucket=your-atlantis-s3-bucket
+```
+
+**결과**:
+1. StackKit 모듈을 사용한 Terraform 구성 생성
+2. 중앙 Atlantis와 연동하는 `atlantis.yaml` 생성
+3. GitHub Webhook 설정 안내 (프로젝트별 1회)
+
+---
+
+## 💻 고급 시나리오: 웹 애플리케이션 스택
 
 VPC 위에 웹 서버와 데이터베이스를 추가해보겠습니다.
 
@@ -238,7 +278,7 @@ terraform output
 
 ---
 
-## ⚡ 시나리오 3: 서버리스 애플리케이션
+## ⚡ 고급 시나리오: 서버리스 애플리케이션
 
 Lambda와 DynamoDB를 사용한 서버리스 스택을 구축해보겠습니다.
 
@@ -453,66 +493,31 @@ terraform/scripts/import-resources.sh \
 
 ---
 
-## 🤖 시나리오 4: AI-Powered 워크플로우
+## 🤖 중앙 Atlantis + AI 리뷰어 워크플로우 체험
 
-PR 기반의 AI 리뷰가 포함된 Atlantis 워크플로우를 설정해보겠습니다.
+방법 2에서 설정한 중앙 집중식 Atlantis + AI 리뷰어의 실제 워크플로우를 체험해봅시다.
 
-### Step 1: 사전 준비
-GitHub Personal Access Token, Slack Webhook URL, OpenAI API Key를 준비해주세요.
+### 워크플로우 흐름
+1. **PR 생성**: 프로젝트 레포에서 Terraform 변경사항이 포함된 PR 생성
+2. **중앙 Atlantis**: 허용된 레포의 PR을 감지하고 자동으로 `terraform plan` 실행
+3. **AI 분석**: 중앙 AI 리뷰어가 GPT-4로 Plan 결과를 분석
+4. **Slack 알림**: 모든 프로젝트의 분석 결과를 중앙에서 Slack으로 전송
+5. **검토 및 Apply**: 검토 후 `atlantis apply` 명령으로 배포
 
-- **GitHub Token**: Settings → Developer settings → Personal access tokens
-  - 필요 권한: `repo`, `admin:repo_hook`
-- **Slack Webhook**: Slack → Apps → Incoming Webhooks
-- **OpenAI API Key**: OpenAI Platform → API Keys
-
-### Step 2: AI-Reviewer + Atlantis 설치
+### AI 리뷰 테스트
 ```bash
-# 원클릭 설치
-./scripts/setup-atlantis-ai.sh \
-    --github-token=ghp_xxxxxxxxxxxx \
-    --slack-webhook=https://hooks.slack.com/services/... \
-    --openai-key=sk-xxxxxxxxxxxxxxxx \
-    --repo-allowlist="github.com/myorg/*"
-```
-
-**설치 과정** (약 5-7분):
-- ✅ UnifiedReviewerHandler Lambda 빌드 (Java 21)
-- ✅ AWS Secrets Manager에 시크릿 저장
-- ✅ Terraform 스택 생성 및 배포
-- ✅ Atlantis ECS 클러스터 구축
-- ✅ S3, SQS, EventBridge 연동 설정
-
-### Step 3: GitHub Repository 설정
-설치 완료 후 출력되는 정보를 사용하여:
-
-1. **Webhook 추가**
-   - Repository Settings → Webhooks → Add webhook
-   - Payload URL: `{출력된 ALB DNS}/events`
-   - Content type: `application/json`
-   - Secret: AWS Secrets Manager의 `atlantis/webhook-secret`
-   - Events: Pull requests, Issue comments, Push
-
-2. **atlantis.yaml 추가**
-   ```bash
-   cp atlantis/atlantis.yaml ./atlantis.yaml
-   git add atlantis.yaml
-   git commit -m "Add Atlantis configuration"
-   git push
-   ```
-
-### Step 4: AI 리뷰 테스트
-```bash
-# 테스트용 변경사항 추가
-echo "# Test change" >> terraform/stacks/my-app-dev-ap-northeast-2/main.tf
+# 프로젝트 레포에서 테스트용 변경사항 추가
+echo "# 중앙 AI 리뷰어 테스트 변경" >> terraform/stacks/my-web-app/dev/main.tf
 
 # PR 생성
 git add .
-git commit -m "Test AI review functionality"
-git checkout -b feature/test-ai-review
-git push origin feature/test-ai-review
+git commit -m "중앙 AI 리뷰어 테스트: 주석 추가"
+git checkout -b feature/test-central-ai-review
+git push origin feature/test-central-ai-review
 
 # GitHub에서 PR 생성
-# → AI가 자동으로 Plan을 분석하고 Slack으로 리뷰 결과 전송!
+# → 중앙 Atlantis가 자동으로 Plan 실행
+# → 중앙 AI 리뷰어가 분석하고 Slack으로 결과 전송!
 ```
 
 ### AI 리뷰 결과 예시
@@ -531,6 +536,32 @@ Slack에서 받게 되는 메시지:
 
 ✅ 승인 권장
 인프라 변경이 없는 문서 업데이트입니다.
+
+💰 비용 영향: 없음
+🔒 보안 영향: 없음
+```
+
+### 실제 리소스 변경 시 예시
+```
+🤖 AI Review - Terraform Plan
+
+📊 변경 사항
+• 생성: 3개 리소스 (EC2, Security Group, ELB)
+• 수정: 1개 리소스 (Auto Scaling Group)
+• 삭제: 0개 리소스
+• 월 예상 비용: +$45
+
+🔍 주요 변경사항
+• t3.micro → t3.small 인스턴스 타입 변경
+• 새로운 보안 그룹 추가 (포트 443 허용)
+• ELB 추가로 고가용성 확보
+
+⚠️ 주의사항
+• 비용이 월 $23에서 $68로 증가합니다
+• 보안 그룹에 HTTPS 포트가 모든 IP에 열립니다
+
+✅ 승인 권장 (조건부)
+성능 향상이 예상되지만 비용 증가를 검토하세요.
 ```
 
 ---
@@ -720,9 +751,43 @@ terraform destroy -target=module.expensive_resource
 3. **모니터링 추가**: CloudWatch, X-Ray를 활용한 관찰 가능성
 4. **보안 강화**: WAF, Shield, GuardDuty를 활용한 보안 계층
 
+## 🚀 GitHub Actions 자동 검증 설정 (권장)
+
+모든 PR에서 자동으로 Terraform 검증과 비용 추정을 수행하도록 설정하세요.
+
+### ⚡ 5분 설정
+```bash
+# 1. 워크플로우 템플릿 복사
+mkdir -p .github/workflows
+cp .github/workflow-templates/terraform-validation.yml .github/workflows/
+cp .github/workflow-templates/terraform-pr-plan.yml .github/workflows/
+
+# 2. GitHub Repository Secrets 설정 (Settings → Secrets → Actions)
+# AWS_ROLE_ARN="arn:aws:iam::123456789012:role/GitHubActionsRole"  
+# INFRACOST_API_KEY="ico-xxxxxxxxxxxxxxxx" (선택사항)
+
+# 3. 커밋 후 PR 생성
+git add .github/workflows/
+git commit -m "Add StackKit Terraform validation workflows"
+git push origin main
+```
+
+### 🎯 자동 검증 기능
+- ✅ **Terraform 코드 검증**: Format, Validate, Plan 자동 실행
+- 💰 **비용 추정**: Infracost로 인프라 비용 자동 계산
+- 🛡️ **보안 검사**: StackKit 보안 정책 자동 검증
+- 📊 **PR 코멘트**: 상세한 결과를 PR에 자동으로 추가
+- 🚨 **실패 알림**: 문제 발생 시 즉시 알림
+
+**📚 상세 설정 가이드**: [GitHub Actions 가이드](./docs/GITHUB_ACTIONS_GUIDE.md)
+
+---
+
 ### 문서 및 가이드
 - 📖 **메인 문서**: [README.md](./README.md)
-- 🤖 **AI 리뷰어 상세 가이드**: [README.md - 부록 A](./README.md#부록-a-ai-powered-terraform-워크플로우)
+- 🚀 **GitHub Actions 자동 검증**: [docs/GITHUB_ACTIONS_GUIDE.md](./docs/GITHUB_ACTIONS_GUIDE.md)
+- 🤖 **중앙 Atlantis 설정**: `./scripts/setup-atlantis-central.sh --help`
+- 🚀 **프로젝트 레포 연동**: `./scripts/setup-project-repo.sh --help`
 - 📦 **기존 리소스 Import**: [terraform/docs/IMPORT_GUIDE.md](./terraform/docs/IMPORT_GUIDE.md)
 - 🔧 **모듈 상세 사용법**: 각 모듈의 `README.md` 파일
 

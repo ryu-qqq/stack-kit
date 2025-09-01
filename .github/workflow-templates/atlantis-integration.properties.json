@@ -1,0 +1,16 @@
+{
+    "name": "StackKit Atlantis Integration",
+    "description": "Integration with central Atlantis server including command monitoring and status updates",
+    "iconName": "robot",
+    "categories": [
+        "atlantis",
+        "automation", 
+        "integration",
+        "terraform"
+    ],
+    "filePatterns": [
+        "terraform/**/*.tf",
+        "terraform/**/*.tfvars",
+        "atlantis.yaml"
+    ]
+}
