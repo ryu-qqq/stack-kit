@@ -40,7 +40,7 @@ output "service_name" {
 
 output "service_arn" {
   description = "ARN of the ECS service"
-  value       = var.create_service ? aws_ecs_service.main[0].arn : null
+  value       = var.create_service ? aws_ecs_service.main[0].id : null
 }
 
 output "security_group_id" {

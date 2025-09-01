@@ -147,6 +147,55 @@ variable "region"     { type = string }
 variable "env"        { type = string }
 variable "stack_name" { type = string }
 
+# Infrastructure Import Options
+variable "use_existing_vpc" {
+  description = "Use existing VPC instead of creating new one"
+  type        = bool
+  default     = false
+}
+
+variable "existing_vpc_id" {
+  description = "Existing VPC ID to use (required if use_existing_vpc is true)"
+  type        = string
+  default     = ""
+}
+
+variable "existing_public_subnet_ids" {
+  description = "Existing public subnet IDs (required if use_existing_vpc is true)"
+  type        = list(string)
+  default     = []
+}
+
+variable "existing_private_subnet_ids" {
+  description = "Existing private subnet IDs (required if use_existing_vpc is true)"
+  type        = list(string)
+  default     = []
+}
+
+variable "use_existing_s3_bucket" {
+  description = "Use existing S3 bucket for Atlantis outputs"
+  type        = bool
+  default     = false
+}
+
+variable "existing_s3_bucket_name" {
+  description = "Existing S3 bucket name (required if use_existing_s3_bucket is true)"
+  type        = string
+  default     = ""
+}
+
+variable "use_existing_ecs_cluster" {
+  description = "Use existing ECS cluster instead of creating new one"
+  type        = bool
+  default     = false
+}
+
+variable "existing_ecs_cluster_name" {
+  description = "Existing ECS cluster name (required if use_existing_ecs_cluster is true)"
+  type        = string
+  default     = ""
+}
+
 # Atlantis Configuration Variables
 variable "git_username" {
   description = "Git username for Atlantis"
@@ -259,8 +308,8 @@ module "web_server" {
   instance_type  = var.env == "prod" ? "t3.medium" : "t3.micro"
   ami_id         = "ami-0c2acfcb2ac4d02a0" # Amazon Linux 2023
   
-  vpc_id    = module.vpc.vpc_id
-  subnet_id = module.vpc.public_subnet_ids[0]
+  vpc_id    = local.vpc_id
+  subnet_id = local.public_subnet_ids[0]
   
   common_tags = local.common_tags
 }
@@ -276,8 +325,8 @@ module "database" {
   instance_class   = var.env == "prod" ? "db.t3.small" : "db.t3.micro"
   allocated_storage = 20
   
-  vpc_id     = module.vpc.vpc_id
-  subnet_ids = module.vpc.private_subnet_ids
+  vpc_id     = local.vpc_id
+  subnet_ids = local.private_subnet_ids
   
   common_tags = local.common_tags
 }
@@ -292,8 +341,8 @@ module "cache" {
   node_type      = var.env == "prod" ? "cache.t3.micro" : "cache.t2.micro"
   num_cache_nodes = 1
   
-  vpc_id     = module.vpc.vpc_id
-  subnet_ids = module.vpc.private_subnet_ids
+  vpc_id     = local.vpc_id
+  subnet_ids = local.private_subnet_ids
   
   common_tags = local.common_tags
 }
@@ -415,8 +464,9 @@ HCL
             ;;
         atlantis-ai-reviewer)
             cat <<'HCL'
-# VPC Module for Atlantis Infrastructure
+# VPC Module for Atlantis Infrastructure (conditional)
 module "vpc" {
+  count  = var.use_existing_vpc ? 0 : 1
   source = "../../modules/vpc"
   
   project_name = "stackkit"
@@ -426,8 +476,46 @@ module "vpc" {
   common_tags = local.common_tags
 }
 
-# S3 Bucket for storing Atlantis outputs
+# Data sources for existing VPC resources
+data "aws_vpc" "existing" {
+  count = var.use_existing_vpc ? 1 : 0
+  id    = var.existing_vpc_id
+}
+
+data "aws_subnets" "existing_public" {
+  count = var.use_existing_vpc ? 1 : 0
+  filter {
+    name   = "vpc-id"
+    values = [var.existing_vpc_id]
+  }
+  filter {
+    name   = "subnet-id"
+    values = var.existing_public_subnet_ids
+  }
+}
+
+data "aws_subnets" "existing_private" {
+  count = var.use_existing_vpc ? 1 : 0
+  filter {
+    name   = "vpc-id"  
+    values = [var.existing_vpc_id]
+  }
+  filter {
+    name   = "subnet-id"
+    values = var.existing_private_subnet_ids
+  }
+}
+
+# Local values for VPC references
+locals {
+  vpc_id = var.use_existing_vpc ? data.aws_vpc.existing[0].id : module.vpc[0].vpc_id
+  public_subnet_ids = var.use_existing_vpc ? var.existing_public_subnet_ids : module.vpc[0].public_subnet_ids
+  private_subnet_ids = var.use_existing_vpc ? var.existing_private_subnet_ids : module.vpc[0].private_subnet_ids
+}
+
+# S3 Bucket for storing Atlantis outputs (conditional)
 module "atlantis_outputs_bucket" {
+  count  = var.use_existing_s3_bucket ? 0 : 1
   source = "../../modules/s3"
   
   project_name = "stackkit"
@@ -447,6 +535,18 @@ module "atlantis_outputs_bucket" {
   ]
   
   common_tags = local.common_tags
+}
+
+# Data source for existing S3 bucket
+data "aws_s3_bucket" "existing_atlantis_outputs" {
+  count  = var.use_existing_s3_bucket ? 1 : 0
+  bucket = var.existing_s3_bucket_name
+}
+
+# Local values for resource references
+locals {
+  atlantis_outputs_bucket_name = var.use_existing_s3_bucket ? data.aws_s3_bucket.existing_atlantis_outputs[0].bucket : module.atlantis_outputs_bucket[0].bucket_name
+  atlantis_outputs_bucket_arn = var.use_existing_s3_bucket ? data.aws_s3_bucket.existing_atlantis_outputs[0].arn : module.atlantis_outputs_bucket[0].bucket_arn
 }
 
 # SQS Queues for AI processing pipeline
@@ -492,7 +592,7 @@ module "plan_ai_reviewer" {
   function_name = "${var.stack_name}-plan-ai-reviewer"
   runtime       = "java21"
   handler       = "com.stackkit.atlantis.reviewer.PlanReviewerHandler::handleRequest"
-  filename      = "../../lambda-functions/plan-ai-reviewer/target/plan-ai-reviewer-1.0.0.jar"
+  filename      = "../../ai-reviewer/build/libs/atlantis-ai-reviewer-1.0.0.jar"
   
   memory_size = 512
   timeout     = 900  # 15 minutes
@@ -525,7 +625,7 @@ module "apply_ai_reviewer" {
   function_name = "${var.stack_name}-apply-ai-reviewer"
   runtime       = "java21"
   handler       = "com.stackkit.atlantis.reviewer.ApplyReviewerHandler::handleRequest"
-  filename      = "../../lambda-functions/apply-ai-reviewer/target/apply-ai-reviewer-1.0.0.jar"
+  filename      = "../../ai-reviewer/build/libs/atlantis-ai-reviewer-1.0.0.jar"
   
   memory_size = 512
   timeout     = 900
@@ -588,7 +688,7 @@ resource "aws_lb" "atlantis" {
   internal           = false
   load_balancer_type = "application"
   security_groups    = [aws_security_group.alb.id]
-  subnets            = module.vpc.public_subnet_ids
+  subnets            = local.public_subnet_ids
 
   enable_deletion_protection = var.env == "prod" ? true : false
 
@@ -631,7 +731,7 @@ resource "aws_lb_listener" "atlantis" {
 # Security Groups
 resource "aws_security_group" "alb" {
   name_prefix = "${var.stack_name}-atlantis-alb-"
-  vpc_id      = module.vpc.vpc_id
+  vpc_id      = local.vpc_id
 
   ingress {
     description = "HTTP"
@@ -665,8 +765,9 @@ resource "aws_security_group" "alb" {
   }
 }
 
-# ECS Cluster for Atlantis
+# ECS Cluster for Atlantis (conditional)
 module "atlantis_cluster" {
+  count  = var.use_existing_ecs_cluster ? 0 : 1
   source = "../../modules/ecs"
   
   project_name = "stackkit"
@@ -674,8 +775,8 @@ module "atlantis_cluster" {
   cluster_name = "${var.stack_name}-atlantis"
   
   # VPC Configuration
-  vpc_id     = module.vpc.vpc_id
-  subnet_ids = module.vpc.private_subnet_ids
+  vpc_id     = local.vpc_id
+  subnet_ids = local.private_subnet_ids
   
   # Service Configuration
   service_name    = "atlantis"
@@ -735,7 +836,7 @@ module "atlantis_cluster" {
         },
         {
           name  = "S3_BUCKET_NAME"
-          value = module.atlantis_outputs_bucket.bucket_name
+          value = local.atlantis_outputs_bucket_name
         },
         {
           name  = "PLAN_QUEUE_URL"
@@ -826,8 +927,8 @@ module "atlantis_cluster" {
         "s3:ListBucket"
       ]
       Resource = [
-        module.atlantis_outputs_bucket.bucket_arn,
-        "${module.atlantis_outputs_bucket.bucket_arn}/*"
+        local.atlantis_outputs_bucket_arn,
+        "${local.atlantis_outputs_bucket_arn}/*"
       ]
     },
     {
@@ -876,15 +977,15 @@ resource "aws_efs_file_system" "atlantis_data" {
 }
 
 resource "aws_efs_mount_target" "atlantis_data" {
-  count           = length(module.vpc.private_subnet_ids)
+  count           = length(local.private_subnet_ids)
   file_system_id  = aws_efs_file_system.atlantis_data.id
-  subnet_id       = module.vpc.private_subnet_ids[count.index]
+  subnet_id       = local.private_subnet_ids[count.index]
   security_groups = [aws_security_group.efs.id]
 }
 
 resource "aws_security_group" "efs" {
   name_prefix = "${var.stack_name}-atlantis-efs-"
-  vpc_id      = module.vpc.vpc_id
+  vpc_id      = local.vpc_id
 
   ingress {
     description = "NFS"
@@ -1026,12 +1127,12 @@ HCL
         atlantis-ai-reviewer)
             cat <<'HCL'
 output "vpc_id" {
-  value       = module.vpc.vpc_id
+  value       = local.vpc_id
   description = "VPC ID for Atlantis infrastructure"
 }
 
 output "atlantis_outputs_bucket" {
-  value       = module.atlantis_outputs_bucket.bucket_name
+  value       = local.atlantis_outputs_bucket_name
   description = "S3 bucket name for storing Atlantis plan/apply outputs"
 }
 
@@ -1123,7 +1224,22 @@ region     = "${REGION}"
 env        = "${ENV}"
 stack_name = "${STACK}"
 
-# Atlantis Configuration - UPDATE THESE VALUES
+# === Infrastructure Import Options ===
+# 기존 VPC 사용 여부 (기본값: false - 새 VPC 생성)
+use_existing_vpc = false
+# existing_vpc_id = "vpc-0123456789abcdef0"
+# existing_public_subnet_ids = ["subnet-0123456789abcdef0", "subnet-0abcdef123456789"]
+# existing_private_subnet_ids = ["subnet-0fedcba987654321", "subnet-0987654321fedcba"]
+
+# 기존 S3 버킷 사용 여부 (기본값: false - 새 버킷 생성)
+use_existing_s3_bucket = false
+# existing_s3_bucket_name = "my-existing-atlantis-bucket"
+
+# 기존 ECS 클러스터 사용 여부 (기본값: false - 새 클러스터 생성)
+use_existing_ecs_cluster = false
+# existing_ecs_cluster_name = "my-existing-ecs-cluster"
+
+# === Atlantis Configuration ===
 git_username  = "your-github-username"
 git_hostname  = "github.com"
 repo_allowlist = "github.com/your-org/*"

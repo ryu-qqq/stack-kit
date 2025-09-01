@@ -1,6 +1,6 @@
 # Lambda Function
 resource "aws_lambda_function" "main" {
-  function_name                  = "${var.project_name}-${var.environment}-${var.function_name}"
+  function_name                  = "${var.environment}-${var.project_name}-${var.function_name}"
   role                          = aws_iam_role.lambda.arn
   handler                       = var.handler
   source_code_hash              = var.source_code_hash
@@ -222,7 +222,7 @@ resource "aws_lambda_alias" "main" {
 resource "aws_cloudwatch_metric_alarm" "lambda_errors" {
   count = var.create_cloudwatch_alarms ? 1 : 0
 
-  alarm_name          = "${var.project_name}-${var.environment}-${var.function_name}-errors"
+  alarm_name          = "${var.environment}-${var.project_name}-${var.function_name}-errors"
   comparison_operator = "GreaterThanThreshold"
   evaluation_periods  = "2"
   metric_name         = "Errors"
@@ -243,7 +243,7 @@ resource "aws_cloudwatch_metric_alarm" "lambda_errors" {
 resource "aws_cloudwatch_metric_alarm" "lambda_duration" {
   count = var.create_cloudwatch_alarms ? 1 : 0
 
-  alarm_name          = "${var.project_name}-${var.environment}-${var.function_name}-duration"
+  alarm_name          = "${var.environment}-${var.project_name}-${var.function_name}-duration"
   comparison_operator = "GreaterThanThreshold"
   evaluation_periods  = "2"
   metric_name         = "Duration"
@@ -264,7 +264,7 @@ resource "aws_cloudwatch_metric_alarm" "lambda_duration" {
 resource "aws_cloudwatch_metric_alarm" "lambda_throttles" {
   count = var.create_cloudwatch_alarms ? 1 : 0
 
-  alarm_name          = "${var.project_name}-${var.environment}-${var.function_name}-throttles"
+  alarm_name          = "${var.environment}-${var.project_name}-${var.function_name}-throttles"
   comparison_operator = "GreaterThanThreshold"
   evaluation_periods  = "2"
   metric_name         = "Throttles"

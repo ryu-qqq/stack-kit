@@ -222,10 +222,7 @@ resource "aws_cloudwatch_event_api_destination" "destinations" {
   invocation_endpoint             = var.api_destinations[count.index].invocation_endpoint
   http_method                     = var.api_destinations[count.index].http_method
   invocation_rate_limit_per_second = var.api_destinations[count.index].invocation_rate_limit_per_second
-  connection_arn                  = var.api_destinations[count.index].connection_name != null ? 
-    aws_cloudwatch_event_connection.connections[
-      index(var.connections[*].name, var.api_destinations[count.index].connection_name)
-    ].arn : var.api_destinations[count.index].connection_arn
+  connection_arn                  = var.api_destinations[count.index].connection_name != null ? aws_cloudwatch_event_connection.connections[index(var.connections[*].name, var.api_destinations[count.index].connection_name)].arn : var.api_destinations[count.index].connection_arn
 }
 
 # EventBridge Archive
@@ -245,10 +242,7 @@ resource "aws_cloudwatch_event_replay" "replays" {
 
   name         = "${var.project_name}-${var.environment}-${var.replays[count.index].name}"
   description  = var.replays[count.index].description
-  event_source_arn = var.replays[count.index].archive_name != null ?
-    aws_cloudwatch_event_archive.archives[
-      index(var.archives[*].name, var.replays[count.index].archive_name)
-    ].arn : var.replays[count.index].event_source_arn
+  event_source_arn = var.replays[count.index].archive_name != null ? aws_cloudwatch_event_archive.archives[index(var.archives[*].name, var.replays[count.index].archive_name)].arn : var.replays[count.index].event_source_arn
   
   dynamic "destination" {
     for_each = [var.replays[count.index].destination]

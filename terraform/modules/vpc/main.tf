@@ -77,7 +77,7 @@ resource "aws_route_table" "public" {
   vpc_id = aws_vpc.main.id
 
   route {
-    cidr_block = "0.0.0.0/0"
+    cidr_block = "0.0.0.0/0" # ALLOW_PUBLIC_EXEMPT - Internet gateway route required for public subnets
     gateway_id = aws_internet_gateway.main.id
   }
 
@@ -93,7 +93,7 @@ resource "aws_route_table" "private" {
   dynamic "route" {
     for_each = var.enable_nat_gateway ? [1] : []
     content {
-      cidr_block     = "0.0.0.0/0"
+      cidr_block     = "0.0.0.0/0" # ALLOW_PUBLIC_EXEMPT - NAT gateway route required for private subnets
       nat_gateway_id = aws_nat_gateway.main[count.index].id
     }
   }
@@ -134,7 +134,7 @@ resource "aws_security_group" "default" {
     from_port   = 0
     to_port     = 0
     protocol    = "-1"
-    cidr_blocks = ["0.0.0.0/0"]
+    cidr_blocks = ["0.0.0.0/0"] # ALLOW_PUBLIC_EXEMPT - Default SG needs outbound internet access
   }
 
   tags = merge(var.common_tags, {

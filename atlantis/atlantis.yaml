@@ -24,6 +24,15 @@ projects:
       when_modified: ["**/*.tf", "**/*.tfvars", "../../../modules/**"]
     terraform_version: v1.8.5
 
+  # atlantis-ai-reviewer/dev 스택
+  - name: atlantis-ai-reviewer-dev
+    dir: terraform/stacks/atlantis-ai-reviewer/dev
+    workflow: stackkit-dev
+    autoplan:
+      enabled: true
+      when_modified: ["**/*.tf", "**/*.tfvars", "../../../modules/**"]
+    terraform_version: v1.8.5
+
 # === 공통/환경별 워크플로 ===
 workflows:
   # dev 환경: -var-file dev.tfvars
@@ -39,26 +48,71 @@ workflows:
             # 1) 플랜을 JSON/텍스트로 덤프
             terraform show -json "$PLANFILE" > tfplan.json
             terraform show "$PLANFILE" > plan.txt
-            # 2) 업로드 경로 구성
+            
+            # 2) Infracost 비용 추정 실행
+            echo "💰 Infracost 비용 추정 실행 중..."
+            if command -v infracost &> /dev/null; then
+                # Infracost 설정 확인
+                if [[ -z "${INFRACOST_API_KEY:-}" ]]; then
+                    echo "⚠️  INFRACOST_API_KEY가 설정되지 않음. 비용 추정 건너뛰기."
+                    echo '{"totalMonthlyCost":"0","currency":"USD","projects":[]}' > infracost.json
+                else
+                    # Infracost 실행
+                    infracost breakdown \
+                        --path . \
+                        --format json \
+                        --out-file infracost.json \
+                        --terraform-plan-path "$PLANFILE" || {
+                        echo "⚠️  Infracost 실행 실패. 기본 비용 데이터 생성."
+                        echo '{"totalMonthlyCost":"0","currency":"USD","projects":[]}' > infracost.json
+                    }
+                    
+                    # 사람이 읽기 쉬운 형태로도 생성
+                    infracost breakdown \
+                        --path . \
+                        --format table \
+                        --terraform-plan-path "$PLANFILE" > infracost.txt 2>/dev/null || {
+                        echo "비용 추정 데이터를 가져올 수 없습니다." > infracost.txt
+                    }
+                fi
+            else
+                echo "⚠️  Infracost가 설치되지 않음. 기본 비용 데이터 생성."
+                echo '{"totalMonthlyCost":"0","currency":"USD","projects":[]}' > infracost.json
+                echo "Infracost가 설치되지 않아 비용 추정을 수행할 수 없습니다." > infracost.txt
+            fi
+            
+            # 3) 업로드 경로 구성
             BUCKET="${PLAN_BUCKET:-plan-artifacts}"
-            PREFIX="${BASE_REPO_OWNER}/${BASE_REPO_NAME}/${PULL_NUM}/${PROJECT_NAME:-$(basename "$REPO_REL_DIR" | tr '/' '-')}"
-            # 3) 변경 유무(리소스 변화 여부) 계산
+            PREFIX="atlantis/${BASE_REPO_OWNER}/${BASE_REPO_NAME}/${PULL_NUM}/${PROJECT_NAME:-$(basename "$REPO_REL_DIR" | tr '/' '-')}"
+            
+            # 4) 변경 유무(리소스 변화 여부) 계산
             HAS_CHANGES=$(jq '(.resource_changes|length) > 0' tfplan.json)
-            # 4) 메타(manifest) 생성
+            
+            # 5) 비용 정보 추출
+            MONTHLY_COST=$(jq -r '.totalMonthlyCost // "0"' infracost.json 2>/dev/null || echo "0")
+            
+            # 6) 메타(manifest) 생성 (비용 정보 포함)
             jq -n --arg repo "${BASE_REPO_OWNER}/${BASE_REPO_NAME}" \
                   --arg pr "$PULL_NUM" \
                   --arg proj "$PROJECT_NAME" \
                   --arg action "plan" \
                   --arg status "success" \
                   --arg commit "$HEAD_COMMIT" \
+                  --arg cost "$MONTHLY_COST" \
                   --argjson has "$HAS_CHANGES" \
-                  '{repo:$repo,pr:($pr|tonumber),project:$proj,action:$action,status:$status,commit:$commit,has_changes:$has}' \
+                  '{repo:$repo,pr:($pr|tonumber),project:$proj,action:$action,status:$status,commit:$commit,has_changes:$has,monthly_cost:$cost}' \
               > manifest.json
-            # 5) S3 업로드
+            
+            # 7) S3 업로드 (Infracost 결과 포함)
             aws s3 cp "$PLANFILE"      "s3://$BUCKET/$PREFIX/tfplan.bin"
             aws s3 cp tfplan.json      "s3://$BUCKET/$PREFIX/tfplan.json"
             aws s3 cp plan.txt         "s3://$BUCKET/$PREFIX/plan.txt"
+            aws s3 cp infracost.json   "s3://$BUCKET/$PREFIX/infracost.json"
+            aws s3 cp infracost.txt    "s3://$BUCKET/$PREFIX/infracost.txt"
             aws s3 cp manifest.json    "s3://$BUCKET/$PREFIX/manifest.json"
+            
+            echo "📤 Plan 결과 및 비용 추정이 AI 리뷰를 위해 업로드되었습니다."
+            echo "💰 예상 월간 비용: $MONTHLY_COST USD"
     apply:
       steps:
         # 내장 apply 대신 커스텀 실행(로그 파일 보존)
@@ -68,7 +122,7 @@ workflows:
             STATUS=$?
             set -e
             BUCKET="${PLAN_BUCKET:-plan-artifacts}"
-            PREFIX="${BASE_REPO_OWNER}/${BASE_REPO_NAME}/${PULL_NUM}/${PROJECT_NAME:-$(basename "$REPO_REL_DIR" | tr '/' '-')}"
+            PREFIX="atlantis/${BASE_REPO_OWNER}/${BASE_REPO_NAME}/${PULL_NUM}/${PROJECT_NAME:-$(basename "$REPO_REL_DIR" | tr '/' '-')}"
             jq -n --arg repo "${BASE_REPO_OWNER}/${BASE_REPO_NAME}" \
                   --arg pr "$PULL_NUM" \
                   --arg proj "$PROJECT_NAME" \
@@ -90,24 +144,69 @@ workflows:
             extra_args: ["-input=false", "-var-file", "prod.tfvars"]
         - run: |
             set -euo pipefail
+            # 1) 플랜을 JSON/텍스트로 덤프
             terraform show -json "$PLANFILE" > tfplan.json
             terraform show "$PLANFILE" > plan.txt
+            
+            # 2) Infracost 비용 추정 실행 (prod 환경용)
+            echo "💰 Infracost 비용 추정 실행 중..."
+            if command -v infracost &> /dev/null; then
+                if [[ -z "${INFRACOST_API_KEY:-}" ]]; then
+                    echo "⚠️  INFRACOST_API_KEY가 설정되지 않음. 비용 추정 건너뛰기."
+                    echo '{"totalMonthlyCost":"0","currency":"USD","projects":[]}' > infracost.json
+                else
+                    infracost breakdown \
+                        --path . \
+                        --format json \
+                        --out-file infracost.json \
+                        --terraform-plan-path "$PLANFILE" || {
+                        echo "⚠️  Infracost 실행 실패. 기본 비용 데이터 생성."
+                        echo '{"totalMonthlyCost":"0","currency":"USD","projects":[]}' > infracost.json
+                    }
+                    
+                    infracost breakdown \
+                        --path . \
+                        --format table \
+                        --terraform-plan-path "$PLANFILE" > infracost.txt 2>/dev/null || {
+                        echo "비용 추정 데이터를 가져올 수 없습니다." > infracost.txt
+                    }
+                fi
+            else
+                echo "⚠️  Infracost가 설치되지 않음. 기본 비용 데이터 생성."
+                echo '{"totalMonthlyCost":"0","currency":"USD","projects":[]}' > infracost.json
+                echo "Infracost가 설치되지 않아 비용 추정을 수행할 수 없습니다." > infracost.txt
+            fi
+            
+            # 3) 업로드 경로 구성
             BUCKET="${PLAN_BUCKET:-plan-artifacts}"
-            PREFIX="${BASE_REPO_OWNER}/${BASE_REPO_NAME}/${PULL_NUM}/${PROJECT_NAME:-$(basename "$REPO_REL_DIR" | tr '/' '-')}"
+            PREFIX="atlantis/${BASE_REPO_OWNER}/${BASE_REPO_NAME}/${PULL_NUM}/${PROJECT_NAME:-$(basename "$REPO_REL_DIR" | tr '/' '-')}"
+            
+            # 4) 변경 유무 및 비용 정보 계산
             HAS_CHANGES=$(jq '(.resource_changes|length) > 0' tfplan.json)
+            MONTHLY_COST=$(jq -r '.totalMonthlyCost // "0"' infracost.json 2>/dev/null || echo "0")
+            
+            # 5) 메타(manifest) 생성 (비용 정보 포함)
             jq -n --arg repo "${BASE_REPO_OWNER}/${BASE_REPO_NAME}" \
                   --arg pr "$PULL_NUM" \
                   --arg proj "$PROJECT_NAME" \
                   --arg action "plan" \
                   --arg status "success" \
                   --arg commit "$HEAD_COMMIT" \
+                  --arg cost "$MONTHLY_COST" \
                   --argjson has "$HAS_CHANGES" \
-                  '{repo:$repo,pr:($pr|tonumber),project:$proj,action:$action,status:$status,commit:$commit,has_changes:$has}' \
+                  '{repo:$repo,pr:($pr|tonumber),project:$proj,action:$action,status:$status,commit:$commit,has_changes:$has,monthly_cost:$cost}' \
               > manifest.json
+            
+            # 6) S3 업로드 (Infracost 결과 포함)
             aws s3 cp "$PLANFILE"      "s3://$BUCKET/$PREFIX/tfplan.bin"
             aws s3 cp tfplan.json      "s3://$BUCKET/$PREFIX/tfplan.json"
             aws s3 cp plan.txt         "s3://$BUCKET/$PREFIX/plan.txt"
+            aws s3 cp infracost.json   "s3://$BUCKET/$PREFIX/infracost.json"
+            aws s3 cp infracost.txt    "s3://$BUCKET/$PREFIX/infracost.txt"
             aws s3 cp manifest.json    "s3://$BUCKET/$PREFIX/manifest.json"
+            
+            echo "📤 Plan 결과 및 비용 추정이 AI 리뷰를 위해 업로드되었습니다."
+            echo "💰 예상 월간 비용: $MONTHLY_COST USD"
     apply:
       steps:
         - run: |
@@ -116,7 +215,7 @@ workflows:
             STATUS=$?
             set -e
             BUCKET="${PLAN_BUCKET:-plan-artifacts}"
-            PREFIX="${BASE_REPO_OWNER}/${BASE_REPO_NAME}/${PULL_NUM}/${PROJECT_NAME:-$(basename "$REPO_REL_DIR" | tr '/' '-')}"
+            PREFIX="atlantis/${BASE_REPO_OWNER}/${BASE_REPO_NAME}/${PULL_NUM}/${PROJECT_NAME:-$(basename "$REPO_REL_DIR" | tr '/' '-')}"
             jq -n --arg repo "${BASE_REPO_OWNER}/${BASE_REPO_NAME}" \
                   --arg pr "$PULL_NUM" \
                   --arg proj "$PROJECT_NAME" \

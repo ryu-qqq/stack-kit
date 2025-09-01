@@ -1,6 +1,6 @@
 # SQS Queue
 resource "aws_sqs_queue" "main" {
-  name                       = "${var.project_name}-${var.environment}-${var.queue_name}"
+  name                       = "${var.environment}-${var.project_name}-${var.queue_name}"
   delay_seconds              = var.delay_seconds
   max_message_size           = var.max_message_size
   message_retention_seconds  = var.message_retention_seconds
@@ -28,7 +28,7 @@ resource "aws_sqs_queue" "main" {
   sqs_managed_sse_enabled          = var.sqs_managed_sse_enabled
 
   tags = merge(var.common_tags, {
-    Name = "${var.project_name}-${var.environment}-${var.queue_name}"
+    Name = "${var.environment}-${var.project_name}-${var.queue_name}"
   })
 }
 
@@ -36,7 +36,7 @@ resource "aws_sqs_queue" "main" {
 resource "aws_sqs_queue" "dlq" {
   count = var.create_dlq ? 1 : 0
 
-  name                       = "${var.project_name}-${var.environment}-${var.queue_name}-dlq"
+  name                       = var.fifo_queue ? "${var.environment}-${var.project_name}-${replace(var.queue_name, ".fifo", "")}-dlq.fifo" : "${var.environment}-${var.project_name}-${var.queue_name}-dlq"
   delay_seconds              = 0
   max_message_size           = var.max_message_size
   message_retention_seconds  = var.dlq_message_retention_seconds
@@ -53,7 +53,7 @@ resource "aws_sqs_queue" "dlq" {
   sqs_managed_sse_enabled          = var.sqs_managed_sse_enabled
 
   tags = merge(var.common_tags, {
-    Name = "${var.project_name}-${var.environment}-${var.queue_name}-dlq"
+    Name = "${var.environment}-${var.project_name}-${var.queue_name}-dlq"
   })
 }
 

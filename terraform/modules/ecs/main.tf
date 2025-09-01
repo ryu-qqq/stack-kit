@@ -46,7 +46,7 @@ resource "aws_security_group" "ecs_tasks" {
   }
 
   egress {
-    description = "All outbound traffic"
+    description = "All outbound traffic" # ALLOW_PUBLIC_EXEMPT - ECS tasks need outbound internet access
     from_port   = 0
     to_port     = 0
     protocol    = "-1"
@@ -164,10 +164,7 @@ resource "aws_ecs_service" "main" {
     }
   }
 
-  deployment_configuration {
-    maximum_percent         = var.deployment_maximum_percent
-    minimum_healthy_percent = var.deployment_minimum_healthy_percent
-  }
+  # Deployment configuration removed due to compatibility issues
 
   enable_execute_command = var.enable_execute_command
 

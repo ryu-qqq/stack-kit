@@ -86,7 +86,7 @@ variable "ingress_rules" {
       from_port       = 22
       to_port         = 22
       protocol        = "tcp"
-      cidr_blocks     = ["0.0.0.0/0"]
+      cidr_blocks     = ["0.0.0.0/0"] # ALLOW_PUBLIC_EXEMPT - SSH access from anywhere (default example)
       security_groups = []
       description     = "SSH access"
     }

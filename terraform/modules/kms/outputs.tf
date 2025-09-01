@@ -85,4 +85,4 @@ output "key_arn_for_iam" {
   value       = aws_kms_key.main.arn
 }
 
-data "aws_region" "current" {}
+# Data source already defined in main.tf

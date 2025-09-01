@@ -66,7 +66,7 @@ resource "aws_s3_bucket_lifecycle_configuration" "main" {
       }
 
       dynamic "transition" {
-        for_each = lookup(rule.value, "transitions", [])
+        for_each = lookup(rule.value, "transitions", null) != null ? lookup(rule.value, "transitions", []) : []
         content {
           days          = lookup(transition.value, "days", null)
           date          = lookup(transition.value, "date", null)
@@ -75,7 +75,7 @@ resource "aws_s3_bucket_lifecycle_configuration" "main" {
       }
 
       dynamic "noncurrent_version_transition" {
-        for_each = lookup(rule.value, "noncurrent_version_transitions", [])
+        for_each = lookup(rule.value, "noncurrent_version_transitions", null) != null ? lookup(rule.value, "noncurrent_version_transitions", []) : []
         content {
           noncurrent_days = noncurrent_version_transition.value.days
           storage_class   = noncurrent_version_transition.value.storage_class

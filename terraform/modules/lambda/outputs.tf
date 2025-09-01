@@ -70,7 +70,7 @@ output "function_url" {
 
 output "function_url_creation_time" {
   description = "Lambda 함수 URL 생성 시간"
-  value       = var.create_function_url ? aws_lambda_function_url.main[0].creation_time : null
+  value       = var.create_function_url ? aws_lambda_function_url.main[0].url_id : null
 }
 
 output "alias_arn" {

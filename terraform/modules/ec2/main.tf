@@ -74,7 +74,7 @@ resource "aws_security_group" "main" {
     from_port   = 0
     to_port     = 0
     protocol    = "-1"
-    cidr_blocks = ["0.0.0.0/0"]
+    cidr_blocks = ["0.0.0.0/0"] # ALLOW_PUBLIC_EXEMPT - EC2 SG needs outbound access
     description = "All outbound traffic"
   }
 
