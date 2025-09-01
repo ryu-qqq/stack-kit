@@ -7,48 +7,63 @@
 ## ✨ 핵심 기능
 
 - **🧩 12개 AWS 서비스 모듈**: VPC, EC2, RDS, Lambda 등 즉시 사용 가능
-- **🤖 AI-Powered 코드 리뷰**: OpenAI GPT-4로 Terraform Plan/Apply 자동 분석
 - **⚡ 5분 인프라 구축**: 스크립트 한 번으로 전체 스택 배포
-- **🔄 Atlantis 워크플로우**: PR 기반 인프라 변경 관리
 - **📊 비용 최적화**: 환경별 리소스 크기 자동 조정
 - **🛡️ 보안 검증**: 자동화된 보안 정책 검사
+
+## 🤖 AI-Powered 리뷰 시스템 (선택사항)
+
+- **AI 코드 리뷰**: OpenAI GPT-4로 Terraform Plan/Apply 자동 분석
+- **🔄 Atlantis 워크플로우**: PR 기반 인프라 변경 관리
+- **중앙 집중식 관리**: 한 번 구축하면 여러 프로젝트에서 공유 사용
 
 ---
 
 ## 🚀 5분 빠른 시작
 
-### 1. 저장소 클론
+### 방법 1: 기존 프로젝트에 Terraform 모듈만 설치 (권장 ⭐)
+
 ```bash
-git clone https://github.com/your-org/stackkit.git
+# 기존 Spring/React 프로젝트 디렉토리로 이동
+cd your-existing-project
+
+# StackKit Terraform 모듈만 설치
+curl -sSL https://raw.githubusercontent.com/your-org/stackkit/main/scripts/stackkit-init.sh | bash
+
+# 인프라 배포
+cd terraform
+terraform init
+terraform plan
+terraform apply
+```
+
+**결과 구조:**
+```
+your-spring-project/          # 기존 프로젝트 유지
+├── src/main/java/           # 기존 Spring 코드
+├── terraform/               # StackKit 모듈 (새로 추가)
+│   ├── modules/            # AWS 리소스 모듈
+│   └── scripts/            # 배포 스크립트
+└── scripts/                # 설치 스크립트
+```
+
+### 방법 2: AI 리뷰어 구축 (선택사항, 한 번만 구축)
+
+AI 리뷰 기능을 원하는 경우에만 별도로 구축:
+
+```bash
+# StackKit 전체 클론
+git clone https://github.com/ryu-qqq/stackkit.git
 cd stackkit
+
+# AI-Powered Atlantis 구축 (중앙 집중식, 여러 프로젝트에서 공유)
+./scripts/setup-atlantis-ai.sh
 ```
 
-### 2. 첫 번째 스택 생성
-```bash
-# 새로운 애플리케이션 스택 생성
-terraform/scripts/new-stack.sh my-app dev
-
-# 생성된 디렉토리로 이동
-cd terraform/stacks/my-app-dev-ap-northeast-2
-
-# VPC 모듈 추가 (예시)
-cat >> main.tf << 'EOF'
-
-module "vpc" {
-  source = "../../modules/vpc"
-  
-  project_name = "my-app"
-  environment  = "dev"
-  vpc_cidr     = "10.0.0.0/16"
-  
-  availability_zones = ["ap-northeast-2a", "ap-northeast-2c"]
-  public_subnet_cidrs  = ["10.0.1.0/24", "10.0.2.0/24"]
-  private_subnet_cidrs = ["10.0.10.0/24", "10.0.20.0/24"]
-  
-  common_tags = local.common_tags
-}
-EOF
-```
+**구축 후 사용법:**
+1. **AI 리뷰어**: 한 번 구축하면 모든 프로젝트에서 공유 사용
+2. **다른 프로젝트들**: 방법 1로 Terraform 모듈만 설치
+3. **GitHub Webhook**: 각 프로젝트 Repository에 설정하여 AI 리뷰 연동
 
 ### 3. 인프라 배포
 ```bash
