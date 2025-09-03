@@ -1,0 +1,143 @@
+# StackKit Atlantis 설정 파일
+# 이 파일을 수정하여 당신의 조직에 맞게 설정하세요
+
+organization:
+  name: "mycompany"  # 📝 필수: 조직 이름 (AWS 리소스 명명에 사용)
+  domain: ""         # 선택: 커스텀 도메인 (예: atlantis.mycompany.com)
+
+environment:
+  name: "dev"        # 📝 필수: 환경 이름 (dev, staging, prod)
+  region: "ap-northeast-2"  # AWS 리전
+
+# 기존 AWS 리소스 사용 설정 (선택사항)
+existing_resources:
+  # VPC 설정 - 기존 VPC 사용하려면 enable: true
+  vpc:
+    enable: false           # true로 변경하면 기존 VPC 사용
+    vpc_id: ""             # 기존 VPC ID (예: vpc-12345678)
+    public_subnet_ids:      # 퍼블릭 서브넷 ID 리스트
+      - "subnet-12345678"
+      - "subnet-87654321"
+    private_subnet_ids:     # 프라이빗 서브넷 ID 리스트  
+      - "subnet-abcdefgh"
+      - "subnet-hijklmno"
+  
+  # S3 버킷 - 기존 버킷 사용하려면 enable: true
+  s3:
+    enable: false           # true로 변경하면 기존 버킷 사용
+    bucket_name: ""        # 기존 S3 버킷명 (예: my-terraform-state)
+  
+  # DynamoDB - 기존 테이블 사용하려면 enable: true
+  dynamodb:
+    enable: false           # true로 변경하면 기존 테이블 사용
+    table_name: ""         # 기존 DynamoDB 테이블명 (예: terraform-locks)
+
+# GitHub 설정
+github:
+  # 관리할 레포지토리 패턴 (Atlantis가 접근할 수 있는 레포들)
+  repository_patterns:
+    - "github.com/mycompany/*"
+    - "github.com/mycompany/team-*"
+  
+  # Webhook 설정 (자동으로 설정됨)
+  auto_webhook: true
+
+# AI 리뷰어 설정
+ai_reviewer:
+  model: "gpt-4o-mini"      # OpenAI 모델
+  language: "korean"        # 리뷰 언어 (korean, english)
+  cost_threshold: 1000      # 비용 경고 임계값 (USD)
+  
+  # 검토할 항목들
+  review_items:
+    - security          # 보안 취약점
+    - cost             # 비용 분석
+    - best_practices   # AWS 모범사례
+    - performance      # 성능 최적화
+
+# Atlantis 고급 설정
+atlantis:
+  # 승인 요구사항 (환경별)
+  approval_requirements:
+    dev:
+      - mergeable
+    staging:
+      - approved
+      - mergeable
+    prod:
+      - approved
+      - mergeable
+      
+  # 병렬 실행 설정
+  parallel_plan: true
+  parallel_apply: false
+  
+  # 자동 머지 설정
+  auto_merge_after_apply: false
+
+# 알림 설정
+notifications:
+  slack:
+    enabled: true
+    channels:
+      success: "#infrastructure"
+      failure: "#alerts"
+      review: "#code-review"
+  
+  email:
+    enabled: false
+    recipients: []
+
+# 비용 관리
+cost_management:
+  # 환경별 비용 한도
+  monthly_limits:
+    dev: 500      # USD
+    staging: 2000
+    prod: 10000
+  
+  # 비용 초과 시 동작
+  on_cost_exceeded: "warn"  # warn, block
+
+# 보안 정책
+security:
+  # 필수 태그
+  required_tags:
+    - "Project"
+    - "Environment"
+    - "Owner"
+  
+  # 금지된 리소스 타입
+  blocked_resources: []
+  
+  # VPC 외부 접근 제한
+  block_public_access: true
+
+# 확장 설정
+extensions:
+  # 사용자 정의 정책 파일들
+  custom_policies: []
+  
+  # 추가 검증 스크립트
+  validation_scripts: []
+  
+  # 사용자 정의 알림 Webhook
+  custom_webhooks: []
+
+# 예시 설정 (실제 값으로 변경하세요)
+# existing_resources:
+#   vpc:
+#     enable: true
+#     vpc_id: "vpc-0a1b2c3d4e5f6g7h8"
+#     public_subnet_ids:
+#       - "subnet-0123456789abcdef0"
+#       - "subnet-fedcba9876543210f"
+#     private_subnet_ids:
+#       - "subnet-0a1b2c3d4e5f6g7h8"
+#       - "subnet-8h7g6f5e4d3c2b1a0"
+#   s3:
+#     enable: true
+#     bucket_name: "my-company-terraform-state-bucket"
+#   dynamodb:
+#     enable: true
+#     table_name: "my-terraform-state-locks"

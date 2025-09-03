@@ -1,0 +1,37 @@
+# StackKit Atlantis 템플릿 설정 예제
+# 이 파일을 terraform.tfvars로 복사하고 실제 값을 입력하세요
+
+# 조직 정보
+org_name = "mycompany"                    # 회사명 (AWS 리소스 이름에 사용)
+environment = "dev"                       # 환경 (dev, staging, prod)
+aws_region = "ap-northeast-2"            # AWS 리전
+
+# 기존 VPC 설정 (필수)
+vpc_id = "vpc-0123456789abcdef0"         # 기존 VPC ID
+public_subnet_ids = [                     # ALB용 퍼블릭 서브넷 (최소 2개)
+  "subnet-0123456789abcdef0",
+  "subnet-fedcba9876543210f"
+]
+private_subnet_ids = [                    # ECS용 프라이빗 서브넷 (최소 2개)
+  "subnet-0a1b2c3d4e5f6g7h8",
+  "subnet-8h7g6f5e4d3c2b1a0"
+]
+
+# 기존 S3 버킷 (필수)
+s3_bucket_name = "my-terraform-state-bucket"
+
+# GitHub 설정 (필수)
+github_token = "ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"  # GitHub Personal Access Token
+github_user = "mycompany-devops"         # GitHub 사용자명
+repo_allowlist = [                       # Atlantis가 접근할 저장소
+  "github.com/mycompany/*",
+  "github.com/mycompany/infrastructure"
+]
+
+# API 키 설정 (필수)
+openai_api_key = "sk-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+slack_webhook_url = "https://hooks.slack.com/services/T00000000/B00000000/XXXXXXXXXXXXXXXXXXXXXXXX"
+
+# 선택적 설정
+infracost_api_key = ""                   # 비용 분석 (선택사항)
+atlantis_image_tag = "v0.28.5"          # Atlantis Docker 이미지 버전
