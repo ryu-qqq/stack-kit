@@ -28,13 +28,15 @@ aws s3 ls
 ### GitHub 설정 준비
 
 ```bash
-# GitHub Personal Access Token 생성 (다음 권한 필요)
-# - repo (full control)
-# - admin:repo_hook
-# - admin:org_hook (조직의 경우)
+# 1. AWS OIDC 설정 완료 (OIDC_SETUP.md 참고)
+export AWS_OIDC_ROLE_ARN="arn:aws:iam::123456789012:role/GitHubActions-StackKit-Atlantis"
+
+# 2. GitHub Personal Access Token 생성 (다음 권한 필요)
+# - repo (full control): Atlantis가 PR 관리 및 저장소 클론용
+# - admin:repo_hook: GitHub Webhook 자동 설정용
 export GITHUB_TOKEN="ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
 
-# Slack Webhook URL 생성
+# 3. Slack Webhook URL 생성
 # Slack App → Incoming Webhooks 활성화
 export SLACK_WEBHOOK="https://hooks.slack.com/services/T00000000/B00000000/XXXXXXXXXXXXXXXXXXXXXXXX"
 ```
@@ -92,9 +94,8 @@ EOF
 저장소의 Settings → Secrets and variables → Actions에서 설정:
 
 ```bash
-# 다음 값들을 GitHub Secrets에 추가
-AWS_ACCESS_KEY_ID="AKIAIOSFODNN7EXAMPLE"
-AWS_SECRET_ACCESS_KEY="wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
+# 다음 값들을 GitHub Secrets에 추가 (OIDC 사용)
+AWS_OIDC_ROLE_ARN="arn:aws:iam::123456789012:role/GitHubActions-StackKit-Atlantis"
 GITHUB_TOKEN="ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
 OPENAI_API_KEY="sk-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
 SLACK_WEBHOOK_URL="https://hooks.slack.com/services/T00000000/B00000000/XXXXXXXXXXXXXXXXXXXXXXXX"

@@ -14,12 +14,15 @@
 
 ### 2단계: GitHub Secrets 설정
 
+### AWS OIDC 설정 (필수)
+
+보안을 위해 AWS Access Key 대신 OIDC를 사용합니다. **[OIDC 설정 가이드](OIDC_SETUP.md)**를 먼저 완료하세요.
+
 저장소의 Settings → Secrets and variables → Actions에서 다음 secrets를 추가하세요:
 
 ```bash
 # 필수 Secrets
-AWS_ACCESS_KEY_ID="AKIAIOSFODNN7EXAMPLE"
-AWS_SECRET_ACCESS_KEY="wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
+AWS_OIDC_ROLE_ARN="arn:aws:iam::123456789012:role/GitHubActions-StackKit-Atlantis"
 GITHUB_TOKEN="ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
 OPENAI_API_KEY="sk-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
 SLACK_WEBHOOK_URL="https://hooks.slack.com/services/T00000000/B00000000/XXXXXXXXXXXXXXXXXXXXXXXX"
@@ -27,6 +30,11 @@ SLACK_WEBHOOK_URL="https://hooks.slack.com/services/T00000000/B00000000/XXXXXXXX
 # 선택사항
 INFRACOST_API_KEY=""
 ```
+
+**GITHUB_TOKEN 사용 용도**:
+- Atlantis가 GitHub API 호출 (PR 코멘트, 저장소 클론)
+- GitHub Webhook 자동 설정
+- 필요 권한: `repo`, `admin:repo_hook`
 
 ### 3단계: 설정 파일 작성
 
