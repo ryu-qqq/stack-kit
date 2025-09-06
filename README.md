@@ -24,7 +24,6 @@ cd stackkit
 curl -sSL https://github.com/ryu-qqq/stackkit/raw/main/connect.sh | \
   bash -s -- --atlantis-url http://mycompany-atlantis.aws.com
 
-# 🎉 완료! 이제 PR만 만들면 자동으로 AI가 Terraform을 리뷰해줍니다
 ```
 
 **결과:** 
@@ -223,7 +222,7 @@ cd stackkit
 git checkout -b feature/my-improvement
 
 # 변경사항 작성 후 테스트
-./quick-start.sh --dry-run --org test --github-token ghp_xxx --openai-key sk-xxx
+./quick-start.sh --dry-run --org test --github-token ghp_xxx 
 ```
 
 ---
