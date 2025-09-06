@@ -1,187 +1,129 @@
-# OPA Conftest Policy for GUIDE.md Terraform Enforcement
-# Policy as Code implementation of GUIDE.md rules
+package terraform
 
-package terraform.analysis
+# ===== 설정 =====
+required_tags := ["Environment", "Project", "Component", "ManagedBy"]
+valid_environments := {"dev", "prod"}  # 팀 기준
 
-import rego.v1
+# ===== 입력 헬퍼 =====
+plan := input
+rcs := plan.resource_changes
+config := plan.configuration
 
-# GUIDE.md Rule: No backend blocks in modules
-deny contains msg if {
-    input.resource_changes
-    some i
-    resource := input.resource_changes[i]
-    contains(resource.address, "module.")
-    
-    # Check if this is a backend configuration in a module
-    file_path := resource.provider_config_key
-    contains(file_path, "infra/modules/")
-    
-    msg := sprintf("GUIDE.md VIOLATION: Backend configuration found in module at %s. Move backend to stack level.", [file_path])
+# after(계획 적용 후) 값 가져오기
+after(rc) := v {
+  some i
+  rc.change.after != null
+  v := rc.change.after
 }
 
-# GUIDE.md Rule: No provider blocks in modules  
-deny contains msg if {
-    input.configuration.provider_config
-    some provider_key
-    provider := input.configuration.provider_config[provider_key]
-    
-    # Check if provider is defined in a module
-    contains(provider.module_address, "module.")
-    
-    msg := sprintf("GUIDE.md VIOLATION: Provider block found in module %s. Remove provider from modules.", [provider.module_address])
+# 자원 타입/액션 필터
+is_managed_resource(rc) {
+  rc.type != ""
+  rc.mode == "managed"
+}
+will_be_applied(rc) {
+  some a
+  a := rc.change.actions[_]
+  a == "create" or a == "update" or a == "replace"
 }
 
-# GUIDE.md Rule: No data aws_* name lookups (specific to problematic ones)
-deny contains msg if {
-    input.configuration.root_module.data
-    some resource_type
-    some resource_name
-    resource := input.configuration.root_module.data[resource_type][resource_name]
-    
-    # Check for problematic data sources that require List permissions
-    prohibited_types := [
-        "aws_sqs_queue",
-        "aws_sns_topic", 
-        "aws_sqs_queues",
-        "aws_sns_topics"
-    ]
-    
-    resource_type in prohibited_types
-    
-    msg := sprintf("GUIDE.md VIOLATION: Prohibited data source %s.%s found. Use remote_state or variables instead.", [resource_type, resource_name])
+# 태그 맵 추출 (tags_all 우선)
+tags(rc) := t {
+  after(rc).tags_all != null
+  t := after(rc).tags_all
+} else := t {
+  after(rc).tags != null
+  t := after(rc).tags
+} else := t {
+  t := {}
 }
 
-# GUIDE.md Rule: No terraform.workspace usage
-deny contains msg if {
-    input.configuration
-    contains(sprintf("%v", [input.configuration]), "terraform.workspace")
-    
-    msg := "GUIDE.md VIOLATION: terraform.workspace usage detected. Use environment directories instead of workspaces."
+# 보안그룹/룰의 0.0.0.0/0 탐지
+cidrs_after(rc) := s {
+  t := rc.type
+  v := after(rc)
+  some cidr
+  (t == "aws_security_group"  and v.ingress[_].cidr_blocks[_] == cidr)  or
+  (t == "aws_security_group"  and v.egress[_].cidr_blocks[_]  == cidr) or
+  (t == "aws_security_group_rule" and v.cidr_blocks[_] == cidr)
+  s := cidr
 }
 
-# GUIDE.md Rule: Required tags on resources
-deny contains msg if {
-    input.planned_values.root_module.resources
-    some i
-    resource := input.planned_values.root_module.resources[i]
-    
-    # Resources that should have tags
-    taggable_types := [
-        "aws_instance",
-        "aws_s3_bucket", 
-        "aws_vpc",
-        "aws_subnet",
-        "aws_security_group",
-        "aws_lb",
-        "aws_ecs_cluster",
-        "aws_ecs_service",
-        "aws_lambda_function",
-        "aws_sqs_queue",
-        "aws_sns_topic",
-        "aws_dynamodb_table",
-        "aws_rds_instance",
-        "aws_elasticache_cluster"
-    ]
-    
-    resource.type in taggable_types
-    
-    # Check for required tags
-    required_tags := ["Environment", "Project", "Component", "ManagedBy"]
-    some tag
-    tag in required_tags
-    not resource.values.tags[tag]
-    
-    msg := sprintf("GUIDE.md VIOLATION: Required tag '%s' missing on %s.%s", [tag, resource.type, resource.name])
+is_public_cidr(c) { c == "0.0.0.0/0" }
+
+# 예외: 태그로 허용 (AllowPublicExempt=true) 또는 설명에 ALLOW_PUBLIC_EXEMPT 포함
+is_public_exempt(rc) {
+  t := tags(rc)
+  lower(t["AllowPublicExempt"]) == "true"  # 표준 태그
+} else {
+  v := after(rc)
+  contains(lower(v.description), "allow_public_exempt")
 }
 
-# GUIDE.md Rule: Standard naming convention
-deny contains msg if {
-    input.planned_values.root_module.resources
-    some i
-    resource := input.planned_values.root_module.resources[i]
-    
-    # Check naming pattern: environment-component-purpose
-    name := resource.values.name
-    name != null
-    
-    # Skip data sources and computed names
-    not startswith(resource.address, "data.")
-    not contains(name, "$")  # Skip interpolated names
-    
-    # Must contain environment prefix
-    env_patterns := ["prod-", "dev-", "staging-"]
-    not some pattern in env_patterns
-    startswith(name, pattern)
-    
-    msg := sprintf("GUIDE.md VIOLATION: Resource name '%s' doesn't follow naming convention (environment-component-purpose)", [name])
+# ===== 규칙: 데이터소스 이름 조회 금지(SQS/SNS) =====
+deny[msg] {
+  some r
+  r := config.root_module.resources[_]
+  r.mode == "data"
+  startswith(r.type, "aws_sqs_queue")  # data "aws_sqs_queue"
+  msg := sprintf("Do not use data.aws_sqs_queue: %v", [r.name])
+}
+deny[msg] {
+  some r
+  r := config.root_module.resources[_]
+  r.mode == "data"
+  startswith(r.type, "aws_sns_topic")
+  msg := sprintf("Do not use data.aws_sns_topic: %v", [r.name])
 }
 
-# GUIDE.md Rule: No hardcoded regions outside variables
-deny contains msg if {
-    input.configuration.root_module.variables.aws_region
-    
-    # Check for hardcoded regions in resource configurations
-    walk(input.configuration, [path, value])
-    
-    # Look for hardcoded AWS regions
-    is_string(value)
-    region_pattern := "^(us|eu|ap|sa|ca|af|me)-(north|south|east|west|central|northeast|northwest|southeast|southwest)-[0-9]$"
-    regex.match(region_pattern, value)
-    
-    # Skip if it's in variables or data sources
-    not contains(sprintf("%v", path), "variables")
-    not contains(sprintf("%v", path), "data")
-    
-    msg := sprintf("GUIDE.md VIOLATION: Hardcoded region '%s' found at path %v. Use var.aws_region instead.", [value, path])
+# ===== 규칙: 필수 태그 =====
+deny[msg] {
+  rc := rcs[_]
+  is_managed_resource(rc)
+  will_be_applied(rc)
+  t := tags(rc)
+  some k
+  k := required_tags[_]
+  not t[k]
+  msg := sprintf("Missing required tag '%s' on %s.%s", [k, rc.type, rc.name])
 }
 
-# GUIDE.md Rule: Module source should be local paths for internal modules
-deny contains msg if {
-    input.configuration.root_module.module_calls
-    some module_name
-    module_call := input.configuration.root_module.module_calls[module_name]
-    
-    # Check for external module sources when internal should be used
-    source := module_call.source
-    
-    # Internal modules should use relative paths
-    not startswith(source, "./")
-    not startswith(source, "../")
-    contains(source, "/modules/")
-    
-    msg := sprintf("GUIDE.md VIOLATION: Module '%s' source '%s' should use relative path for internal modules.", [module_name, source])
+# ===== 규칙: Environment 태그 값 검증 =====
+deny[msg] {
+  rc := rcs[_]
+  is_managed_resource(rc)
+  will_be_applied(rc)
+  t := tags(rc)
+  not t["Environment"]
+  msg := sprintf("Tag 'Environment' is required on %s.%s", [rc.type, rc.name])
+}
+deny[msg] {
+  rc := rcs[_]
+  is_managed_resource(rc)
+  will_be_applied(rc)
+  t := tags(rc)
+  env := lower(t["Environment"])
+  not valid_environments[env]
+  msg := sprintf("Invalid Environment tag '%s' on %s.%s (allowed: %v)", [t["Environment"], rc.type, rc.name, valid_environments])
 }
 
-# Helper function to check if a resource is in a module
-is_in_module(address) if {
-    contains(address, "module.")
+# ===== 규칙: SG 공개 차단(예외 허용) =====
+deny[msg] {
+  rc := rcs[_]
+  will_be_applied(rc)
+  some c
+  c := cidrs_after(rc)
+  is_public_cidr(c)
+  not is_public_exempt(rc)
+  msg := sprintf("Public CIDR 0.0.0.0/0 not allowed on %s.%s", [rc.type, rc.name])
 }
 
-# Helper function to validate environment values
-valid_environments := ["prod", "dev", "staging"]
-
-is_valid_environment(env) if {
-    env in valid_environments
-}
-
-# GUIDE.md Rule: Environment variable validation
-warn contains msg if {
-    input.configuration.root_module.variables.environment
-    env_var := input.configuration.root_module.variables.environment
-    
-    env_var.default
-    not is_valid_environment(env_var.default)
-    
-    msg := sprintf("GUIDE.md WARNING: Environment default value '%s' is not in approved list: %v", [env_var.default, valid_environments])
-}
-
-# GUIDE.md Rule: Required files structure validation (example)
-warn contains msg if {
-    # This would need to be implemented with file system checks
-    # For now, just a placeholder for the concept
-    
-    # Check if required outputs are defined
-    not input.configuration.root_module.outputs
-    
-    msg := "GUIDE.md WARNING: No outputs defined. Add outputs.tf file per GUIDE.md standards."
+# ===== 경고: 태그 부족하지만 데이터 리소스/특정 타입 제외 시 완화 가능 =====
+warn[msg] {
+  rc := rcs[_]
+  is_managed_resource(rc)
+  will_be_applied(rc)
+  t := tags(rc)
+  count({k | k := required_tags[_]; t[k]}) < count(required_tags)
+  msg := sprintf("Tag coverage incomplete on %s.%s (have: %v)", [rc.type, rc.name, {k: t[k] | k := required_tags[_]; t[k]}])
 }

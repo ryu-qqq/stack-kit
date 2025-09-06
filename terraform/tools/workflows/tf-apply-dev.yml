@@ -1,0 +1,300 @@
+name: "Terraform Apply - Dev (Enhanced)"
+
+on:
+  push:
+    branches: [ "main" ]
+    paths:
+      - 'terraform/stacks/**/dev/**'
+      - 'terraform/stacks/**/*-dev-*/**'
+      - 'terraform/modules/**'
+
+permissions:
+  id-token: write
+  contents: read
+  deployments: write
+
+env:
+  TF_VERSION: "1.7.5"
+  TF_STACK_REGION: ${{ vars.TF_STACK_REGION || 'ap-northeast-2' }}
+  SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK_URL }}
+
+concurrency:
+  group: tf-apply-dev-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  pre-flight:
+    name: "🔍 Pre-flight Checks"
+    runs-on: ubuntu-latest
+    outputs:
+      stacks_to_deploy: ${{ steps.detect.outputs.stacks }}
+      deploy_needed: ${{ steps.detect.outputs.deploy_needed }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - name: Validate secrets
+        run: |
+          if [[ -z "${{ secrets.TF_DEV_ROLE_ARN }}" ]]; then
+            echo "❌ TF_DEV_ROLE_ARN secret is not configured"
+            exit 1
+          fi
+          echo "✅ Required secrets are available"
+
+      - name: Detect dev stacks to deploy
+        id: detect
+        run: |
+          set -euo pipefail
+          
+          # Get changed files
+          CHANGED_FILES=$(git diff --name-only HEAD~1 HEAD)
+          echo "📄 Changed files:"
+          echo "$CHANGED_FILES"
+          
+          # Find dev stacks
+          DEV_STACKS=()
+          
+          # Find dev stacks with backend.hcl
+          while IFS= read -r stack_dir; do
+            if [[ "$stack_dir" =~ (dev|development) ]] && [[ -f "$stack_dir/backend.hcl" ]]; then
+              # Check if any changed files affect this stack
+              if echo "$CHANGED_FILES" | grep -q "^$stack_dir/" || echo "$CHANGED_FILES" | grep -q "^terraform/modules/"; then
+                DEV_STACKS+=("$stack_dir")
+              fi
+            fi
+          done < <(find terraform/stacks -name backend.hcl -exec dirname {} \; | grep -E "(dev|development)" | sort)
+          
+          if [[ ${#DEV_STACKS[@]} -eq 0 ]]; then
+            echo "ℹ️ No dev stacks need deployment"
+            echo "deploy_needed=false" >> $GITHUB_OUTPUT
+            echo "stacks=[]" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+          
+          # Convert to JSON array
+          printf '%s\n' "${DEV_STACKS[@]}" | jq -R . | jq -s . > /tmp/stacks.json
+          
+          echo "deploy_needed=true" >> $GITHUB_OUTPUT
+          echo "stacks=$(cat /tmp/stacks.json)" >> $GITHUB_OUTPUT
+          
+          echo "🚀 Dev stacks to deploy:"
+          cat /tmp/stacks.json | jq -r '.[]'
+
+  deploy-dev:
+    name: "🚀 Deploy to Dev"
+    needs: pre-flight
+    if: needs.pre-flight.outputs.deploy_needed == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    environment:
+      name: dev
+      url: https://console.aws.amazon.com/
+    strategy:
+      fail-fast: false
+      matrix:
+        stack_dir: ${{ fromJson(needs.pre-flight.outputs.stacks_to_deploy) }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          terraform_wrapper: false
+
+      - name: Cache Terraform providers
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.terraform.d/plugin-cache
+            ${{ matrix.stack_dir }}/.terraform/providers
+          key: terraform-${{ runner.os }}-${{ matrix.stack_dir }}-${{ hashFiles(format('{0}/.terraform.lock.hcl', matrix.stack_dir)) }}
+
+      - name: Configure Terraform plugin cache
+        run: |
+          mkdir -p ~/.terraform.d/plugin-cache
+          echo 'plugin_cache_dir = "$HOME/.terraform.d/plugin-cache"' > ~/.terraformrc
+
+      - name: Extract stack metadata
+        id: meta
+        run: |
+          STACK_DIR="${{ matrix.stack_dir }}"
+          STACK_NAME=$(basename "$STACK_DIR")
+          
+          echo "STACK_DIR=$STACK_DIR" >> $GITHUB_OUTPUT
+          echo "STACK_NAME=$STACK_NAME" >> $GITHUB_OUTPUT
+          echo "📦 Deploying stack: $STACK_NAME"
+
+      - name: Configure AWS credentials with enhanced security
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.TF_DEV_ROLE_ARN }}
+          aws-region: ${{ env.TF_STACK_REGION }}
+          role-session-name: terraform-dev-${{ github.run_id }}-${{ strategy.job-index }}
+          role-duration-seconds: 3600
+
+      - name: Verify AWS credentials
+        run: |
+          echo "🔑 AWS Identity:"
+          aws sts get-caller-identity
+          echo "🌍 AWS Region: $(aws configure get region)"
+
+      - name: Terraform init with retry logic
+        working-directory: ${{ steps.meta.outputs.STACK_DIR }}
+        run: |
+          set -euo pipefail
+          
+          for attempt in 1 2 3; do
+            echo "🔄 Init attempt $attempt/3"
+            if terraform init -backend-config=backend.hcl -reconfigure; then
+              echo "✅ Terraform init successful"
+              break
+            else
+              echo "⚠️ Init failed, retrying in 10 seconds..."
+              if [[ $attempt -eq 3 ]]; then
+                echo "❌ All init attempts failed"
+                exit 1
+              fi
+              sleep 10
+            fi
+          done
+
+      - name: Select and validate tfvars
+        id: tfvars
+        working-directory: ${{ steps.meta.outputs.STACK_DIR }}
+        run: |
+          # Priority: dev.tfvars > terraform.tfvars
+          if [[ -f "dev.tfvars" ]]; then
+            TFVARS_FILE="dev.tfvars"
+          elif [[ -f "terraform.tfvars" ]]; then
+            TFVARS_FILE="terraform.tfvars"
+          else
+            echo "❌ No tfvars file found"
+            exit 1
+          fi
+          
+          echo "TFVARS_FILE=$TFVARS_FILE" >> $GITHUB_OUTPUT
+          echo "📋 Using variables: $TFVARS_FILE"
+          
+          # Validate tfvars syntax (basic check)
+          if ! terraform validate -var-file="$TFVARS_FILE" >/dev/null 2>&1; then
+            echo "⚠️ tfvars file may have syntax issues"
+          fi
+
+      - name: Terraform plan for verification
+        working-directory: ${{ steps.meta.outputs.STACK_DIR }}
+        run: |
+          echo "🔍 Generating plan for verification..."
+          terraform plan \
+            -var-file=${{ steps.tfvars.outputs.TFVARS_FILE }} \
+            -out=apply.tfplan \
+            -detailed-exitcode
+          
+          # Show plan summary
+          echo "📋 Plan summary:"
+          terraform show -no-color apply.tfplan | head -50
+
+      - name: Terraform apply with monitoring
+        working-directory: ${{ steps.meta.outputs.STACK_DIR }}
+        run: |
+          echo "🚀 Applying changes..."
+          
+          START_TIME=$(date +%s)
+          
+          if terraform apply -auto-approve apply.tfplan; then
+            END_TIME=$(date +%s)
+            DURATION=$((END_TIME - START_TIME))
+          
+            echo "✅ Apply completed successfully in ${DURATION}s"
+            echo "APPLY_STATUS=success" >> $GITHUB_ENV
+            echo "APPLY_DURATION=${DURATION}" >> $GITHUB_ENV
+          else
+            END_TIME=$(date +%s)
+            DURATION=$((END_TIME - START_TIME))
+          
+            echo "❌ Apply failed after ${DURATION}s"
+            echo "APPLY_STATUS=failed" >> $GITHUB_ENV
+            echo "APPLY_DURATION=${DURATION}" >> $GITHUB_ENV
+            exit 1
+          fi
+
+      - name: Extract outputs
+        if: env.APPLY_STATUS == 'success'
+        working-directory: ${{ steps.meta.outputs.STACK_DIR }}
+        run: |
+          echo "📤 Terraform outputs:"
+          if terraform output -json > outputs.json 2>/dev/null; then
+            cat outputs.json | jq .
+          else
+            echo "ℹ️ No outputs defined"
+          fi
+
+      - name: Post-deployment verification
+        if: env.APPLY_STATUS == 'success'
+        run: |
+          echo "🧪 Running post-deployment checks..."
+          
+          # Basic AWS connectivity check
+          aws sts get-caller-identity >/dev/null
+          echo "✅ AWS connectivity verified"
+          
+          # Add additional health checks here as needed
+
+      - name: Clean up
+        if: always()
+        working-directory: ${{ steps.meta.outputs.STACK_DIR }}
+        run: |
+          # Clean up temporary files
+          rm -f apply.tfplan outputs.json
+          echo "🧹 Cleaned up temporary files"
+
+      - name: Notify Slack on success
+        if: env.APPLY_STATUS == 'success' && env.SLACK_WEBHOOK != ''
+        run: |
+          curl -X POST -H 'Content-type: application/json' \
+            --data "{
+              \"text\": \"✅ Terraform deployment successful\",
+              \"attachments\": [{
+                \"color\": \"good\",
+                \"fields\": [
+                  {\"title\": \"Stack\", \"value\": \"${{ steps.meta.outputs.STACK_NAME }}\", \"short\": true},
+                  {\"title\": \"Environment\", \"value\": \"dev\", \"short\": true},
+                  {\"title\": \"Duration\", \"value\": \"${{ env.APPLY_DURATION }}s\", \"short\": true},
+                  {\"title\": \"Commit\", \"value\": \"${{ github.sha }}\", \"short\": true}
+                ]
+              }]
+            }" \
+            ${{ env.SLACK_WEBHOOK }}
+
+      - name: Notify Slack on failure
+        if: env.APPLY_STATUS == 'failed' && env.SLACK_WEBHOOK != ''
+        run: |
+          curl -X POST -H 'Content-type: application/json' \
+            --data "{
+              \"text\": \"❌ Terraform deployment failed\",
+              \"attachments\": [{
+                \"color\": \"danger\",
+                \"fields\": [
+                  {\"title\": \"Stack\", \"value\": \"${{ steps.meta.outputs.STACK_NAME }}\", \"short\": true},
+                  {\"title\": \"Environment\", \"value\": \"dev\", \"short\": true},
+                  {\"title\": \"Duration\", \"value\": \"${{ env.APPLY_DURATION }}s\", \"short\": true},
+                  {\"title\": \"Run URL\", \"value\": \"${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}\", \"short\": false}
+                ]
+              }]
+            }" \
+            ${{ env.SLACK_WEBHOOK }}
+
+  no-deployment:
+    name: "ℹ️ No Dev Deployment Needed"
+    needs: pre-flight
+    if: needs.pre-flight.outputs.deploy_needed != 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Report no deployment needed
+        run: |
+          echo "ℹ️ No dev environments need deployment"
+          echo "🔍 Either no dev stacks were affected or no relevant changes were detected"

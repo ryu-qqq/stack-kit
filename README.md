@@ -1,966 +1,229 @@
-# 🏗️ StackKit - Terraform Infrastructure Framework
+# 🚀 StackKit - 5분만에 시작하는 Atlantis
 
-**5분만에 AWS 인프라를 구축하고 AI로 검증하세요** 🚀
-
-표준화된 Terraform 모듈과 자동화 스크립트로 복잡한 AWS 인프라를 간단하게 구축하고 관리할 수 있습니다.
-
-## ✨ 핵심 기능
-
-- **🧩 12개 AWS 서비스 모듈**: VPC, EC2, RDS, Lambda 등 즉시 사용 가능
-- **⚡ 5분 인프라 구축**: 스크립트 한 번으로 전체 스택 배포
-- **📊 비용 최적화**: 환경별 리소스 크기 자동 조정
-- **🛡️ 보안 검증**: 자동화된 보안 정책 검사
-
-## 🤖 중앙 집중식 Atlantis + AI 리뷰어 (권장 ⭐)
-
-- **🏗️ 중앙 관리**: 단일 Atlantis 서버로 모든 프로젝트 레포 관리
-- **🤖 AI 코드 리뷰**: OpenAI GPT-4로 Terraform Plan/Apply 자동 분석
-- **📊 PR 기반 검증**: Pull Request마다 인프라 변경사항 자동 검토
-- **💰 비용 효율성**: 인프라 중복 없이 모든 프로젝트에 AI 리뷰 적용
+StackKit은 팀이 5분만에 자신만의 Atlantis 구축하여 안전하고 효율적인 Infrastructure as Code 워크플로우를 시작할 수 있도록 도와줍니다.
 
 ---
 
-## 🚀 5분 빠른 시작
+## ⚡ 5분 빠른 시작
 
-### 방법 1: 기존 프로젝트에 Terraform 모듈만 설치
+### 🎯 목표: 나만의 Atlantis  구축
 
 ```bash
-# 기존 프로젝트 디렉토리로 이동
-cd your-existing-project
+# 1. StackKit 클론 (30초)
+git clone https://github.com/ryu-qqq/stackkit.git
+cd stackkit
 
-# StackKit Terraform 모듈만 설치
-./scripts/stackkit-init.sh -n my-project -t web-app
+# 2. 5분 자동 배포 (5분)
+./quick-start.sh \
+  --org mycompany \
+  --github-token ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx \
+  --slack-webhook https://hooks.slack.com/services/xxx/xxx/xxx \
+  --use-existing-vpc  # EIP 한계 방지를 위한 기존 VPC 사용
 
-# 인프라 배포
-make init-dev
-make apply-dev
+# 3. 기존 저장소 연결 (1분)
+curl -sSL https://github.com/ryu-qqq/stackkit/raw/main/connect.sh | \
+  bash -s -- --atlantis-url http://mycompany-atlantis.aws.com
+
+# 🎉 완료! 이제 PR만 만들면 자동으로 AI가 Terraform을 리뷰해줍니다
 ```
 
-**결과 구조:**
-```
-your-project/                # 기존 프로젝트 유지
-├── src/                    # 기존 애플리케이션 코드
-├── terraform/              # StackKit 모듈 (새로 추가)
-│   ├── modules/           # AWS 서비스 모듈
-│   └── environments/      # 환경별 설정
-├── .github/workflows/     # CI/CD 파이프라인
-└── Makefile              # 배포 명령어
-```
-
-### 방법 2: 중앙 Atlantis + 프로젝트 레포 연동 (권장 ⭐)
-
-**Step 1: 중앙 Atlantis + AI 리뷰어 구축** (최초 1회)
-```bash
-# atlantis-infrastructure 전용 레포에서 실행
-git clone https://github.com/yourorg/atlantis-infrastructure.git
-cd atlantis-infrastructure
-
-# 중앙 Atlantis + AI 리뷰어 구축
-./scripts/setup-atlantis-central.sh \
-  -o mycompany \
-  -g ghp_your-github-token \
-  -k sk-your-openai-key \
-  -s https://hooks.slack.com/your-webhook \
-  -a "github.com/myorg/*"
-```
-
-**Step 2: 각 프로젝트 레포에서 연동**
-```bash
-# 각 프로젝트 레포에서 실행
-cd your-project-repo
-
-# StackKit 모듈 + Atlantis 연동 설정
-./scripts/setup-project-repo.sh \
-  -p my-web-app \
-  -t web-app \
-  -u http://atlantis.mycompany.com \
-  -b mycompany-atlantis-artifacts
-```
-
-**아키텍처:**
-```
-atlantis-infrastructure/     # 중앙 Atlantis (1개)
-└── terraform/stacks/atlantis-central-mycompany/
-    ├── main.tf             # VPC, ECS, Lambda, S3
-    └── ai-reviewer/        # AI 리뷰어 코드
-
-my-web-app/                 # 프로젝트 레포 (N개)
-├── src/                    # 애플리케이션 코드
-├── terraform/stacks/       # StackKit 모듈 사용
-└── atlantis.yaml          # 중앙 Atlantis 연동
-
-my-api-server/              # 프로젝트 레포 (N개)  
-├── src/                    # 애플리케이션 코드
-├── terraform/stacks/       # StackKit 모듈 사용
-└── atlantis.yaml          # 중앙 Atlantis 연동
-```
-
-**사용법:**
-1. **PR 생성** → 중앙 Atlantis가 자동으로 `terraform plan` 실행
-2. **AI 분석** → 중앙 AI 리뷰어가 보안, 비용, 모범사례 분석
-3. **Slack 알림** → 모든 프로젝트의 리뷰 결과를 중앙에서 관리
-4. **승인 후** → `atlantis apply` 코멘트로 배포
-
-### 두 방법의 차이점
-
-| 구분 | 방법 1: 모듈만 설치 | 방법 2: 중앙 Atlantis |
-|------|-------------------|----------------------|
-| **설치** | 5분 | 중앙: 10분, 프로젝트별: 2분 |
-| **비용** | 무료 | 월 $50-80 (모든 프로젝트 공유) |
-| **리뷰** | 수동 | AI 자동 리뷰 |
-| **관리** | 개발자 직접 관리 | 중앙 집중식 관리 |
-| **확장성** | 프로젝트별 독립 | 무제한 프로젝트 추가 |
-| **권장 용도** | 개발/테스트 환경 | 프로덕션 환경 |
+**결과:** 
+- ✅ AWS에 완전한 Atlantis 인프라 배포
+- ✅ GitHub 웹훅 자동 설정으로 PR 기반 워크플로우 활성화  
+- ✅ Slack 알림으로 팀 전체가 실시간 현황 파악
 
 ---
 
-### 🎯 어떤 방법을 선택해야 할까요?
+## ⚙️ 고급 옵션
 
-- **🚀 빠른 시작이 필요하다면**: 방법 1 (모듈만 설치)
-- **🏢 프로덕션에서 안전하게 관리하려면**: 방법 2 (Atlantis + AI)
-- **💰 비용을 최소화하려면**: 방법 1
-- **🤖 AI 리뷰와 자동화가 필요하다면**: 방법 2
-
----
-
-## 🚀 GitHub Actions 워크플로우 (권장 ⭐)
-
-자동화된 Terraform 검증과 비용 추정을 위한 GitHub Actions 워크플로우 템플릿들을 제공합니다.
-
-### 📋 제공되는 워크플로우
-
-| 워크플로우 | 용도 | 포함 기능 |
-|------------|------|-----------|
-| **🔍 Complete Validation** | 프로덕션 환경 | Format, Validate, Plan, 보안 검증, 비용 추정 |
-| **📋 PR Plan & Cost** | PR 비용 분석 | Plan 실행, 상세 비용 분석, PR 코멘트 |
-| **✅ Simple Check** | 빠른 기본 검증 | Format, Validate만 (AWS 연결 불필요) |
-| **🤖 Atlantis Integration** | 중앙 Atlantis 연동 | 서버 상태 확인, 명령어 모니터링 |
-
-### ⚡ 5분 설정
-
+### VPC 설정 (EIP 한계 해결)
 ```bash
-# 1. 워크플로우 파일 복사
-mkdir -p .github/workflows
-cp stackkit/.github/workflow-templates/terraform-validation.yml .github/workflows/
-
-# 2. Repository Secrets 설정 (GitHub 레포 설정에서)
-AWS_ROLE_ARN="arn:aws:iam::123456789012:role/GitHubActionsRole"
-INFRACOST_API_KEY="ico-xxxxxxxxxxxxxxxx"  # 선택사항
-
-# 3. 커밋 후 PR 생성하면 자동 검증 시작!
-git add .github/workflows/
-git commit -m "Add Terraform validation workflow"
+# 기존 VPC 사용 (권장: EIP 한계 방지)
+./quick-start.sh --org mycompany \
+  --github-token xxx --openai-key xxx \
+  --use-existing-vpc \
+  --vpc-id vpc-12345678 \
+  --subnet-ids "subnet-abc123,subnet-def456"
 ```
 
-**🎯 자동으로 수행되는 작업**:
-- ✅ Terraform 코드 검증 (Format, Validate, Plan)
-- 🛡️ 보안 정책 검사 (StackKit 검증 스크립트)
-- 💰 인프라 비용 추정 (Infracost)
-- 📊 PR에 상세 결과 코멘트 추가
-- 🚨 실패 시 자동 알림
-
-**📚 상세 가이드**: [GitHub Actions 설정 가이드](./docs/GITHUB_ACTIONS_GUIDE.md)
-
----
-
-## 🏗️ 프로젝트 구조
-
+### 리소스 충돌 처리
+```bash
+# 충돌 검사 건너뛰기 (고급 사용자용)
+./quick-start.sh --org mycompany \
+  --github-token xxx --openai-key xxx \
+  --skip-conflicts
 ```
-stackkit/
-├── terraform/
-│   ├── modules/                 # 재사용 가능한 AWS 서비스 모듈
-│   │   ├── vpc/                # 🌐 VPC, Subnets, NAT, IGW
-│   │   ├── ec2/                # 💻 EC2, ASG, Security Groups
-│   │   ├── ecs/                # 🐳 ECS, Fargate, Service
-│   │   ├── rds/                # 🗄️ MySQL, PostgreSQL, Multi-AZ
-│   │   ├── elasticache/        # ⚡ Redis, Memcached, Cluster
-│   │   ├── dynamodb/           # 📊 NoSQL DB, GSI, Auto Scaling
-│   │   ├── lambda/             # ⚡ 서버리스 함수, VPC 연결
-│   │   ├── s3/                 # 📦 객체 스토리지, 정책, 암호화
-│   │   ├── sqs/                # 📨 메시지 큐, FIFO, DLQ
-│   │   ├── sns/                # 📢 알림 서비스, 구독, 필터
-│   │   ├── eventbridge/        # 🔄 이벤트 버스, 규칙, 타겟
-│   │   └── kms/                # 🔐 암호화 키, 정책, 로테이션
-│   │
-│   ├── stacks/                 # 실제 배포 단위
-│   │   └── {stack-name}-{env}-{region}/
-│   │       ├── main.tf         # 모듈 조합
-│   │       ├── variables.tf    # 입력 변수
-│   │       ├── outputs.tf      # 출력 값
-│   │       ├── backend.tf      # 상태 관리
-│   │       └── terraform.tfvars # 환경별 설정
-│   │
-│   ├── scripts/                # 자동화 도구
-│   │   ├── new-stack.sh        # 🆕 스택 생성
-│   │   ├── validate.sh         # ✅ 검증 + 비용 추정
-│   │   ├── deploy.sh           # 🚀 배포 자동화
-│   │   ├── destroy.sh          # 💀 안전한 제거
-│   │   └── import-resources.sh # 📦 기존 리소스 Import
-│   │
-│   └── docs/                   # 문서
-│       └── IMPORT_GUIDE.md     # Import 가이드
-│
-├── ai-reviewer/                # AI 리뷰어 Lambda (Java 17)
-│   ├── src/main/java/         # UnifiedReviewerHandler
-│   ├── build.gradle           # 빌드 설정
-│   └── build.sh               # 빌드 스크립트
-│
-├── scripts/                    # 통합 스크립트
-│   ├── setup-atlantis-ai.sh   # 🤖 AI 리뷰어 원클릭 셋업
-│   └── integrate-existing-project.sh # 🔗 기존 프로젝트 통합
-│
-├── atlantis/                   # Atlantis 설정
-│   ├── atlantis.yaml          # 워크플로우 설정
-│   └── repos.yaml             # 저장소 정책
-│
-└── QUICKSTART.md               # 상세한 시작 가이드
+
+### 배포 시뮬레이션
+```bash
+# 실제 배포 없이 계획만 확인
+./quick-start.sh --org mycompany \
+  --github-token xxx --openai-key xxx \
+  --dry-run
+```
+
+## 🔧 필요한 준비물 (5분)
+
+### 1. GitHub Personal Access Token
+```bash
+# GitHub → Settings → Developer settings → Personal access tokens
+# "Generate new token (classic)" 선택
+# 권한 선택: repo (전체), admin:repo_hook
+# 생성된 ghp_로 시작하는 토큰 복사
+```
+
+
+### 2. AWS 계정 설정
+```bash
+# AWS CLI 설치 및 인증 정보 설정
+aws configure
+# 또는 환경 변수로 설정
+export AWS_ACCESS_KEY_ID=your-key
+export AWS_SECRET_ACCESS_KEY=your-secret
+```
+
+### 3. Slack 웹훅 (선택사항)
+```bash
+# Slack → Apps → Incoming Webhooks
+# Add to Slack → 채널 선택 → Webhook URL 복사
 ```
 
 ---
 
-## 🧩 핵심 모듈 소개
+## 📦 무엇이 설치되나요?
 
-### 🌐 **VPC 모듈** - 네트워킹 기반
-```hcl
-module "vpc" {
-  source = "../../modules/vpc"
-  
-  project_name = "my-app"
-  environment  = "dev"
-  vpc_cidr     = "10.0.0.0/16"
-  
-  # Multi-AZ 구성
-  availability_zones = ["ap-northeast-2a", "ap-northeast-2c"]
-  public_subnet_cidrs  = ["10.0.1.0/24", "10.0.2.0/24"]
-  private_subnet_cidrs = ["10.0.10.0/24", "10.0.20.0/24"]
-  
-  # NAT Gateway (환경별 최적화)
-  enable_nat_gateway = true
-  single_nat_gateway = var.environment == "dev"
-  
-  common_tags = local.common_tags
-}
+### 🏗️ AWS 인프라 스택
+- **ECS Fargate**: Atlantis 서버 실행 환경
+- **Application Load Balancer**: 외부 접근을 위한 로드밸런서
+- **Secrets Manager**: GitHub 토큰, OpenAI 키 안전한 보관
+- **CloudWatch**: 로그 및 모니터링
+
+---
+
+## 🚀 주요 기능
+
+### ⚡ 자동화된 워크플로우
+- **PR 생성** → 자동 `terraform plan` 실행
+- **Slack 알림** → 팀에 실시간 상태 공유
+- **승인 후 Apply** → 안전한 인프라 변경
+
+### 🛡️ 보안 중심 설계
+- **시크릿 관리**: AWS Secrets Manager를 통한 안전한 토큰 보관
+- **VPC 격리**: 모든 컴포넌트가 프라이빗 서브넷에서 실행
+- **암호화**: 저장 및 전송 데이터 암호화
+- **접근 제어**: 최소 권한 원칙 적용
+
+---
+
+## 🎯 고급 사용법
+
+### 사용자 정의 도메인 설정
+```bash
+./quick-start.sh --org mycompany \
+  --github-token ghp_xxx --openai-key sk-xxx \
+  --custom-domain atlantis.mycompany.com \
+  --certificate-arn arn:aws:acm:ap-northeast-2:123:certificate/xxx
 ```
 
-### 💻 **EC2 모듈** - 컴퓨팅 자원
-```hcl
-module "web_servers" {
-  source = "../../modules/ec2"
-  
-  project_name  = "my-app"
-  environment   = "dev"
-  instance_type = var.environment == "prod" ? "t3.medium" : "t3.micro"
-  
-  # Auto Scaling
-  min_size         = var.environment == "prod" ? 2 : 1
-  max_size         = var.environment == "prod" ? 10 : 3
-  desired_capacity = var.environment == "prod" ? 2 : 1
-  
-  # 네트워킹
-  vpc_id    = module.vpc.vpc_id
-  subnet_ids = module.vpc.public_subnet_ids
-  
-  common_tags = local.common_tags
-}
+### 프로덕션 환경 배포 (기존 VPC 사용 권장)
+```bash
+./quick-start.sh --org enterprise --environment prod \
+  --github-token ghp_xxx --openai-key sk-xxx \
+  --aws-region us-west-2 \
+  --use-existing-vpc --vpc-id vpc-prod123 \
+  --subnet-ids "subnet-prod1,subnet-prod2"
 ```
 
-### 🗄️ **RDS 모듈** - 데이터베이스
-```hcl
-module "database" {
-  source = "../../modules/rds"
-  
-  project_name    = "my-app"
-  environment     = "dev"
-  engine          = "mysql"
-  engine_version  = "8.0"
-  instance_class  = var.environment == "prod" ? "db.t3.small" : "db.t3.micro"
-  
-  # 가용성 (환경별 설정)
-  multi_az = var.environment == "prod"
-  backup_retention_period = var.environment == "prod" ? 7 : 1
-  
-  # 네트워킹
-  vpc_id     = module.vpc.vpc_id
-  subnet_ids = module.vpc.private_subnet_ids
-  
-  common_tags = local.common_tags
-}
+### 리소스 충돌 문제 해결
+```bash
+# EIP 한계 도달 시
+./quick-start.sh --org mycompany \
+  --github-token ghp_xxx --openai-key sk-xxx \
+  --use-existing-vpc
+
+# CloudWatch 로그 그룹 충돌 시
+./quick-start.sh --org mycompany \
+  --github-token ghp_xxx --openai-key sk-xxx \
+  --skip-conflicts
+
+# 배포 전 체크
+./quick-start.sh --org mycompany \
+  --github-token ghp_xxx --openai-key sk-xxx \
+  --dry-run
 ```
 
-### ⚡ **Lambda 모듈** - 서버리스
-```hcl
-module "api_function" {
-  source = "../../modules/lambda"
-  
-  project_name  = "my-app"
-  environment   = "dev"
-  function_name = "api-handler"
-  
-  runtime = "python3.11"
-  handler = "app.lambda_handler"
-  filename = "api-handler.zip"
-  
-  # 성능 (환경별 최적화)
-  memory_size = var.environment == "prod" ? 512 : 128
-  timeout     = 30
-  
-  # 환경 변수
-  environment_variables = {
-    DB_ENDPOINT = module.database.endpoint
-    CACHE_ENDPOINT = module.cache.endpoint
-  }
-  
-  common_tags = local.common_tags
-}
+### 여러 저장소 일괄 연결
+```bash
+# 저장소 목록 파일 생성
+echo "mycompany/backend-infra
+mycompany/frontend-infra  
+mycompany/data-infra" > repos.txt
+
+# 모든 저장소에 대해 연결 스크립트 실행
+while read repo; do
+  cd "../$repo"
+  curl -sSL https://github.com/ryu-qqq/stackkit/raw/main/connect.sh | \
+    bash -s -- --atlantis-url http://mycompany-atlantis.aws.com
+done < repos.txt
 ```
 
 ---
 
-## 🔧 자동화 스크립트
+## 📚 추가 리소스
 
-### `new-stack.sh` - 스택 생성
+### 🏗️ Terraform 모듈 활용
+StackKit에는 12개 AWS 서비스의 표준화된 모듈이 포함되어 있습니다:
+
 ```bash
-# 기본 사용법
-terraform/scripts/new-stack.sh <stack_name> <environment> [region]
+# 새 프로젝트에서 StackKit 모듈 사용
+./terraform/tools/stackkit-cli.sh create my-web-app dev
 
-# 예시
-terraform/scripts/new-stack.sh my-app dev ap-northeast-2
-terraform/scripts/new-stack.sh my-api prod us-east-1
+# 검증 및 배포
+./terraform/tools/stackkit-cli.sh validate my-web-app dev
+./terraform/tools/stackkit-cli.sh deploy my-web-app dev
 ```
 
-**생성되는 파일들**:
-- `main.tf` - 모듈 조합 및 설정
-- `variables.tf` - 입력 변수 정의  
-- `outputs.tf` - 출력 값
-- `backend.tf` - S3 상태 관리 설정
-- `terraform.tfvars` - 환경별 변수 값
+**📖 상세 가이드**: [Terraform 모듈 완전 가이드](./terraform/README.md)
 
-### `validate.sh` - 종합 검증
+### 💡 실제 사용 예제 (추가 예정..)
+**📁 예제 모음**: [Examples 디렉토리](./examples/)
+- 웹 애플리케이션 스택
+- API 서버 구성
+- 데이터 파이프라인
+- 마이크로서비스 아키텍처
+
+---
+
+## 🔍 문제 해결
+
+### 자주 묻는 질문
+
+**Q: AWS 권한이 부족하다는 오류가 나와요**
 ```bash
-# 전체 검증 (추천)
-terraform/scripts/validate.sh my-app dev
-
-# 비용 추정만
-terraform/scripts/validate.sh my-app dev --cost-only
-
-# JSON 형식 출력
-terraform/scripts/validate.sh my-app dev --format=json
+# IAM 사용자에게 다음 정책 연결 필요:
+# - AdministratorAccess (또는 세분화된 권한)
+aws iam attach-user-policy --user-name your-user --policy-arn arn:aws:iam::aws:policy/AdministratorAccess
 ```
 
-**검증 항목**:
-- ✅ Terraform 문법 검증
-- ✅ 포맷팅 검사
-- ✅ 보안 스캔 (tfsec)
-- ✅ 정책 준수 검증
-- ✅ 비용 추정 (Infracost)
-
-### `deploy.sh` - 안전한 배포
+**Q: GitHub 웹훅이 제대로 작동하지 않아요**
 ```bash
-# 계획 확인
-terraform/scripts/deploy.sh my-app dev plan
-
-# 대화형 배포
-terraform/scripts/deploy.sh my-app dev apply
-
-# 자동 승인 (dev/staging)
-terraform/scripts/deploy.sh my-app dev apply --auto-approve
-
-# 백업과 함께 배포 (prod)
-terraform/scripts/deploy.sh my-app prod apply --backup-state
+# 토큰 권한 확인
+# repo (전체), admin:repo_hook 권한이 필요합니다
 ```
 
 ---
 
-## 🏛️ 아키텍처 원칙
-
-### Stack-centric 구조
-- **모듈**: 재사용 가능한 컴포넌트 (`modules/`)  
-- **스택**: 실제 배포 단위 (`stacks/{name}-{env}-{region}/`)
-- **환경 분리**: 디렉토리 기반 격리
-
-### 상태 관리 표준
-- **백엔드**: S3 + DynamoDB Lock
-- **암호화**: KMS 암호화 활성화  
-- **격리**: 스택별 독립적 상태 파일
-- **백업**: 자동 버전닝
-
-### 명명 규칙
-```
-리소스명: {project}-{environment}-{service}-{purpose}
-예시: my-app-prod-rds-main, my-app-dev-lambda-api
-```
-
-### 필수 태그 정책
-```hcl
-locals {
-  common_tags = {
-    Project     = var.project_name
-    Environment = var.environment
-    Stack       = "${var.project_name}-${var.environment}"
-    Owner       = "platform"
-    ManagedBy   = "terraform"
-  }
-}
-```
-
----
-
-## 💰 비용 최적화
-
-### 환경별 리소스 크기 자동 조정
-```hcl
-# EC2 인스턴스
-instance_type = var.environment == "prod" ? "t3.large" : "t3.micro"
-
-# RDS
-instance_class = var.environment == "prod" ? "db.t3.small" : "db.t3.micro"
-multi_az      = var.environment == "prod"
-
-# Lambda
-memory_size = var.environment == "prod" ? 512 : 128
-
-# Auto Scaling
-min_size = var.environment == "prod" ? 2 : 1
-max_size = var.environment == "prod" ? 10 : 2
-```
-
-### 예상 비용 (월간)
-
-| 환경 | VPC | EC2 | RDS | Lambda | 총합 |
-|------|-----|-----|-----|--------|------|
-| **dev** | 무료 | ~$8 | ~$15 | ~$0 | **~$23** |
-| **staging** | 무료 | ~$25 | ~$30 | ~$1 | **~$56** |
-| **prod** | 무료 | ~$50 | ~$60 | ~$2 | **~$112** |
-
----
-
-## 🛡️ 보안 및 모범 사례
-
-### 보안 기본 설정
-- **전송 중 암호화**: 모든 통신에 TLS/SSL 적용
-- **저장 중 암호화**: RDS, S3, EBS 암호화 활성화
-- **네트워크 격리**: Private 서브넷에 데이터베이스 배치
-- **최소 권한**: 필요한 권한만 부여
-
-### 자동화된 보안 검사
+### 개발 환경 설정
 ```bash
-# 보안 스캔 실행
-terraform/scripts/validate.sh my-app dev --security-only
-
-# 정책 위반 검사
-terraform/scripts/tf_forbidden.sh terraform/stacks/my-app-dev-ap-northeast-2/
-```
-
-### 보안 정책 예시
-```hcl
-# S3 버킷 암호화 강제
-resource "aws_s3_bucket_server_side_encryption_configuration" "example" {
-  bucket = aws_s3_bucket.example.id
-  
-  rule {
-    apply_server_side_encryption_by_default {
-      sse_algorithm = "AES256"
-    }
-  }
-}
-
-# Security Group 최소 권한
-resource "aws_security_group_rule" "allow_https" {
-  type              = "ingress"
-  from_port         = 443
-  to_port           = 443
-  protocol          = "tcp"
-  cidr_blocks       = ["0.0.0.0/0"]
-  security_group_id = aws_security_group.web.id
-}
-```
-
----
-
-## 🔄 기존 AWS 리소스 Import
-
-### Import 도구 사용
-```bash
-# VPC Import
-terraform/scripts/import-resources.sh \
-    ./terraform/stacks/my-app-dev \
-    vpc \
-    module.vpc.aws_vpc.main \
-    vpc-0123456789abcdef0
-
-# RDS Instance Import
-terraform/scripts/import-resources.sh \
-    ./terraform/stacks/my-app-dev \
-    rds \
-    module.database.aws_db_instance.main \
-    my-database-instance
-
-# Security Group Import
-terraform/scripts/import-resources.sh \
-    ./terraform/stacks/my-app-dev \
-    security_group \
-    aws_security_group.web \
-    sg-0123456789abcdef0
-```
-
-### Import 가이드
-자세한 Import 절차는 [`terraform/docs/IMPORT_GUIDE.md`](terraform/docs/IMPORT_GUIDE.md)를 참고하세요.
-
----
-
-## 🚨 문제 해결
-
-### 일반적인 오류들
-
-#### 1. AWS 자격증명 오류
-```bash
-# 현재 자격증명 확인
-aws sts get-caller-identity
-
-# 권한 확인
-aws iam list-attached-user-policies --user-name your-username
-```
-
-#### 2. Terraform 상태 잠금 오류  
-```bash
-# 잠금 해제
-terraform force-unlock <LOCK_ID>
-
-# 상태 파일 새로고침
-terraform refresh
-```
-
-#### 3. 모듈 초기화 오류
-```bash
-# 모듈 캐시 정리
-rm -rf .terraform
-
-# 재초기화
-terraform init -upgrade
-```
-
-#### 4. 비용 초과 경고
-```bash
-# 비용 추정 확인
-terraform/scripts/validate.sh my-app dev --cost-only
-
-# 리소스 크기 조정
-vi terraform.tfvars  # instance_type 등 수정
-```
-
----
-
-## 📚 추가 가이드
-
-- 📖 **상세 시작 가이드**: [QUICKSTART.md](./QUICKSTART.md)
-- 🤖 **AI 리뷰어 + Atlantis 설정**: [부록 A](#부록-a-ai-powered-terraform-워크플로우)
-- 📦 **기존 리소스 Import**: [terraform/docs/IMPORT_GUIDE.md](./terraform/docs/IMPORT_GUIDE.md)
-- 🔧 **모듈 사용법**: 각 모듈의 `README.md` 참조
-
----
-
-## 🏷️ 버전 정보
-
-- **StackKit**: v2.1.0
-- **Terraform**: >= 1.7.0
-- **AWS Provider**: ~> 5.100
-- **Java**: 17 (AI 리뷰어)
-
----
-
-# 부록 A: AI-Powered Terraform 워크플로우
-
-## 🤖 개요
-
-StackKit의 AI-Reviewer + Atlantis 조합을 통해 PR 기반의 지능형 인프라 관리가 가능합니다.
-
-### 🔄 워크플로우
-1. **PR 생성** → Atlantis가 `terraform plan` 자동 실행
-2. **Plan 분석** → UnifiedReviewerHandler가 결과를 OpenAI GPT-4로 분석
-3. **AI 리뷰** → Slack으로 보안/비용/아키텍처 분석 결과 전송
-4. **승인 & Apply** → 배포 결과도 동일한 AI 분석 과정
-
-```
-┌─────────────┐    ┌──────────┐    ┌─────────┐    ┌─────────────┐    ┌─────────┐
-│     PR      │───▶│ Atlantis │───▶│   S3    │───▶│ Lambda      │───▶│  Slack  │
-│  terraform  │    │   ECS    │    │ Plans/  │    │ Unified     │    │ AI      │
-│   changes   │    │ Cluster  │    │ Results │    │ Reviewer    │    │ Review  │
-└─────────────┘    └──────────┘    └─────────┘    └─────────────┘    └─────────┘
-```
-
-## 🚀 설치 및 설정
-
-### 1. 사전 준비사항
-
-#### GitHub Personal Access Token 생성
-1. GitHub → Settings → Developer settings → Personal access tokens
-2. Generate new token (classic)
-3. 필요한 권한: `repo`, `admin:repo_hook`
-
-#### Slack Webhook URL 생성
-1. Slack → Apps → Incoming Webhooks
-2. Add to Slack → 채널 선택
-3. Webhook URL 복사
-
-#### OpenAI API Key 생성
-1. OpenAI Platform → API Keys  
-2. Create new secret key
-3. API Key 복사 (sk-로 시작)
-
-### 2. 원클릭 설치
-
-```bash
-# AI-Reviewer + Atlantis 자동 설치
-./scripts/setup-atlantis-ai.sh \
-    --github-token=ghp_xxxxxxxxxxxx \
-    --slack-webhook=https://hooks.slack.com/services/... \
-    --openai-key=sk-xxxxxxxxxxxxxxxx \
-    --repo-allowlist="github.com/myorg/*"
-```
-
-**설치 과정** (약 5-7분):
-- ✅ UnifiedReviewerHandler Lambda 빌드 (Java 17)
-- ✅ AWS Secrets Manager에 시크릿 저장  
-- ✅ Terraform 스택 생성 및 배포
-- ✅ Atlantis ECS 클러스터 구축
-- ✅ S3, SQS, EventBridge 연동 설정
-
-### 2.1. 수동 배포 (고급 사용자)
-
-기존 인프라를 활용하거나 세부 설정을 제어하려면:
-
-```bash
-# 1. 환경 설정
-cd terraform/stacks/atlantis-ai-reviewer/dev
-cp terraform.tfvars.example terraform.tfvars
-
-# 2. 기존 리소스 활용 설정
-echo 'use_existing_s3_bucket = true' >> terraform.tfvars
-echo 'existing_s3_bucket_name = "your-existing-bucket"' >> terraform.tfvars
-echo 'use_existing_alb = true' >> terraform.tfvars
-echo 'existing_alb_dns_name = "your-alb-dns.com"' >> terraform.tfvars
-
-# 3. Java AI Reviewer 빌드
-cd ../../../../ai-reviewer
-./gradlew build
-
-# 4. Terraform 배포
-cd ../terraform/stacks/atlantis-ai-reviewer/dev
-terraform init
-terraform plan
-terraform apply
-```
-
-**⚠️ 주의사항:**
-- **명명 규칙**: 모든 리소스는 `환경-프로젝트-리소스명` 형식 (예: `dev-atlantis-ai-reviewer`)
-- **SQS 큐**: FIFO 큐는 S3 notification과 호환되지 않으므로 Standard 큐 사용
-- **로그 그룹**: ECS 태스크용 CloudWatch 로그 그룹 `/ecs/dev-atlantis` 자동 생성
-
-### 3. GitHub Repository 설정
-
-배포 완료 후 다음 단계로 GitHub Repository를 설정합니다:
-
-#### 3.1. Webhook 추가
-
-1. **GitHub Repository → Settings → Webhooks → Add webhook**
-
-2. **Webhook 설정:**
-   ```
-   Payload URL: http://dev-atlantis-alb-xxxxx.ap-northeast-2.elb.amazonaws.com/events
-   Content type: application/json
-   Secret: [AWS Secrets Manager에서 확인]
-   ```
-
-3. **Secret 확인 방법:**
-   ```bash
-   # AWS Secrets Manager에서 webhook secret 확인
-   aws secretsmanager get-secret-value \
-     --secret-id atlantis/webhook-secret \
-     --query SecretString --output text
-   ```
-
-4. **이벤트 선택:**
-   - ✅ Pull requests
-   - ✅ Issue comments  
-   - ✅ Push
-   - ✅ Pull request reviews
-
-5. **Active 체크 후 Add webhook**
-
-#### 3.2. atlantis.yaml 추가
-
-Repository 루트에 `atlantis.yaml` 파일 생성:
-
-```yaml
-version: 3
-projects:
-- name: my-project
-  dir: .
-  workflow: stackkit-ai-review
-  apply_requirements: [approved]
-  
-workflows:
-  stackkit-ai-review:
-    plan:
-      steps:
-      - init
-      - plan
-    apply:
-      steps:
-      - apply
-```
-
-#### 3.3. 연결 테스트
-
-1. **테스트 PR 생성:**
-   ```bash
-   # 간단한 변경사항으로 테스트
-   echo "# Test" >> test.md
-   git add test.md
-   git commit -m "test: Atlantis AI 연동 테스트"
-   git push origin feature/test-atlantis
-   ```
-
-2. **PR 생성 후 확인사항:**
-   - Atlantis가 자동으로 `terraform plan` 실행
-   - S3에 plan 결과 저장 (`terraform/dev/atlantis/` 경로)
-   - Lambda 함수가 AI 분석 수행
-   - Slack에 AI 리뷰 결과 전송
-
-3. **문제 발생 시 로그 확인:**
-   ```bash
-   # Atlantis 로그 확인
-   aws logs tail /ecs/dev-atlantis --since 10m --region ap-northeast-2
-   
-   # Lambda 로그 확인  
-   aws logs tail /aws/lambda/dev-atlantis-ai-reviewer --since 10m --region ap-northeast-2
-   ```
-
-## 🏗️ 생성되는 AWS 인프라
-
-### 핵심 구성 요소
-- **ECS Fargate 클러스터**: Atlantis 컨테이너 실행
-- **Application Load Balancer**: GitHub Webhook 엔드포인트
-- **S3 버킷**: Terraform Plan/Apply 결과 저장  
-- **SQS Queue**: Plan/Apply 이벤트 처리 (Standard Queue)
-- **Lambda Function**: UnifiedReviewerHandler (Java 21)
-- **EFS**: Atlantis 데이터 영속성 (BoltDB)
-- **CloudWatch**: 로깅 및 모니터링
-- **Secrets Manager**: 민감한 정보 보관
-
-### UnifiedReviewerHandler 특징
-- **지능형 메시지 라우팅**: SQS 메시지 속성으로 Plan/Apply 자동 구분
-- **통합 처리**: 기존 별도 핸들러를 하나로 통합하여 관리 효율성 증대
-- **FIFO 호환**: Standard Queue와 FIFO Queue 모두 지원
-
-## 📱 AI 리뷰 예시
-
-### Terraform Plan 리뷰
-```
-🤖 AI Review - Terraform Plan
-
-📊 변경 사항
-• 생성: 5개 리소스
-• 수정: 1개 리소스  
-• 삭제: 0개 리소스
-• 월 예상 비용: ~$35
-
-🔍 주요 변경사항
-• AWS RDS 인스턴스 생성 (db.t3.micro)
-• VPC Security Group 규칙 업데이트
-• S3 버킷 정책 수정
-
-🛡️ 보안 검토
-• RDS 암호화 활성화됨 ✅
-• Security Group에 불필요한 0.0.0.0/0 규칙 없음 ✅
-• S3 버킷 퍼블릭 액세스 차단됨 ✅
-
-💰 비용 최적화 제안
-• dev 환경에서 Multi-AZ 비활성화 고려
-• 예약 인스턴스 활용 검토
-
-✅ 승인 권장
-변경사항이 AWS 모범사례를 준수하며 안전합니다.
-```
-
-### Terraform Apply 결과
-```
-✅ 배포 완료!
-
-🏗️ 프로젝트: my-app
-🌍 환경: dev
-
-📊 변경사항
-• 생성: 5개
-• 수정: 1개
-• 삭제: 0개
-
-🤖 AI 요약
-모든 리소스가 성공적으로 배포되었습니다. 
-보안 설정이 적절히 구성되어 있으며, 
-예상 비용 범위 내에서 운영 가능합니다.
-```
-
-## 💰 운영 비용 (월간)
-
-| 리소스 | 예상 비용 | 설명 |
-|--------|-----------|------|
-| ECS Fargate | $15-25 | Atlantis 컨테이너 (512 CPU, 1GB Memory) |
-| ALB | $16 | Application Load Balancer |
-| EFS | $1-3 | Atlantis 데이터 저장소 (BoltDB) |
-| Lambda | $0-2 | UnifiedReviewerHandler 실행 |
-| S3 | $1-5 | Plan/Apply 결과 저장 |
-| SQS/SNS | $0-1 | 메시징 서비스 |
-| **총 예상** | **$33-52** | 월간 운영 비용 |
-
-## 🔧 고급 설정
-
-### AI 프롬프트 커스터마이징
-```bash
-# UnifiedReviewerHandler 수정
-vi ai-reviewer/src/main/java/com/stackkit/atlantis/reviewer/UnifiedReviewerHandler.java
-
-# 재빌드 및 배포
-cd ai-reviewer && ./build.sh
-cd ../terraform/stacks/atlantis-ai-reviewer-dev-us-east-1
-terraform apply
-```
-
-### Atlantis 정책 설정
-```yaml
-# atlantis/repos.yaml
-repos:
-- id: github.com/myorg/my-repo
-  apply_requirements: [approved, mergeable]
-  allowed_overrides: [apply_requirements]
-  allow_custom_workflows: true
-```
-
-### 기존 리소스 재사용
-```hcl
-# terraform.tfvars
-use_existing_vpc = true
-existing_vpc_id = "vpc-0123456789abcdef0"
-existing_public_subnet_ids = ["subnet-pub1", "subnet-pub2"]
-
-use_existing_s3_bucket = true
-existing_s3_bucket_name = "my-atlantis-bucket"
-```
-
-## ✅ 배포 성공 확인
-
-배포가 완료되면 다음 사항들을 확인하여 정상 작동을 검증합니다:
-
-### 1. 인프라 상태 확인
-```bash
-# ECS 서비스 상태 (ACTIVE, 1/1 실행 중이어야 함)
-aws ecs describe-services --cluster dev-atlantis --services atlantis --region ap-northeast-2 \
-  --query 'services[0].{Status:status,RunningCount:runningCount,DesiredCount:desiredCount}' --output table
-
-# ALB 타겟 그룹 상태 (healthy 상태여야 함)
-aws elbv2 describe-target-health \
-  --target-group-arn $(aws elbv2 describe-target-groups --names "dev-atlantis-tg" --region ap-northeast-2 \
-    --query 'TargetGroups[0].TargetGroupArn' --output text) --region ap-northeast-2
-
-# Atlantis 웹 UI 접속 테스트 (HTTP 200 응답)
-curl -s -o /dev/null -w "HTTP Status: %{http_code}\n" http://dev-atlantis-alb-xxxxx.ap-northeast-2.elb.amazonaws.com
-```
-
-### 2. 로그 확인
-```bash
-# Atlantis 정상 시작 로그 확인
-aws logs tail /ecs/dev-atlantis --since 5m --region ap-northeast-2 | grep "Atlantis started"
-
-# 예상 출력: "Atlantis started - listening on port 4141"
-```
-
-### 3. 리소스 명명 규칙 확인
-모든 리소스가 `환경-프로젝트-리소스명` 형식으로 생성되었는지 확인:
-- ✅ Lambda: `dev-atlantis-ai-reviewer`
-- ✅ SQS 큐: `dev-atlantis-ai-reviews`
-- ✅ ECS 클러스터: `dev-atlantis`
-- ✅ ALB: `dev-atlantis-alb-xxxxx`
-- ✅ 로그 그룹: `/ecs/dev-atlantis`
-
-### 4. 접속 정보
-```bash
-# Terraform 출력에서 접속 정보 확인
-terraform output -json | jq -r '.atlantis_url.value'
-# 출력 예: http://dev-atlantis-alb-341663552.ap-northeast-2.elb.amazonaws.com
-```
-
-## 🔄 기존 프로젝트 통합
-
-```bash
-# 기존 Terraform 프로젝트에 AI 리뷰 추가
-./scripts/integrate-existing-project.sh \
-    --project-dir=/path/to/your/terraform/project \
-    --atlantis-url=http://dev-atlantis-alb-xxxxx.ap-northeast-2.elb.amazonaws.com \
-    --import-existing
-
-# 생성된 가이드 확인
-cat /path/to/your/terraform/project/STACKKIT_INTEGRATION_GUIDE.md
-```
-
-## 🔗 GitHub Webhook 설정
-
-배포가 완료되면 GitHub Repository에 Webhook을 설정하여 PR에서 자동 AI 리뷰를 활성화합니다:
-
-### 1. Atlantis URL 확인
-```bash
-# Terraform 출력에서 Atlantis URL 확인
-terraform output atlantis_url
-# 예: http://dev-atlantis-alb-341663552.ap-northeast-2.elb.amazonaws.com
-```
-
-### 2. GitHub Webhook Secret 확인
-```bash
-# AWS Secrets Manager에서 Webhook Secret 확인
-aws secretsmanager get-secret-value \
-  --secret-id atlantis/dev/webhook-secret \
-  --region ap-northeast-2 \
-  --query 'SecretString' --output text
-```
-
-### 3. GitHub Repository Webhook 설정
-1. **GitHub Repository → Settings → Webhooks → Add webhook**
-2. **Payload URL**: `http://dev-atlantis-alb-xxxxx.ap-northeast-2.elb.amazonaws.com/events`
-3. **Content type**: `application/json`
-4. **Secret**: 위에서 확인한 webhook secret 입력
-5. **Events 선택**:
-   - ✅ Pull requests
-   - ✅ Issue comments
-   - ✅ Pull request reviews
-   - ✅ Pull request review comments
-   - ✅ Pushes
-6. **Active** 체크 후 **Add webhook** 클릭
-
-### 4. 연결 테스트
-```bash
-# Webhook 연결 상태 확인 (GitHub에서 Recent Deliveries 탭 확인)
-# 또는 Atlantis 로그에서 webhook 수신 확인
-aws logs tail /ecs/dev-atlantis --since 5m --region ap-northeast-2 | grep "webhook"
-```
-
-### 5. AI 리뷰 테스트
-1. **테스트 PR 생성**: Terraform 파일을 수정하여 PR 생성
-2. **Atlantis 명령어**: PR 코멘트에 `atlantis plan` 입력
-3. **AI 리뷰 확인**: 몇 분 후 AI가 분석한 리뷰 코멘트 확인
-
-### 6. 문제 해결
-**Webhook이 동작하지 않을 때:**
-```bash
-# GitHub Webhook 전달 상태 확인 (GitHub Repository → Settings → Webhooks)
-# Atlantis 로그 확인
-aws logs tail /ecs/dev-atlantis --since 10m --region ap-northeast-2
-
-# Lambda 함수 로그 확인 (AI 리뷰 처리)
-aws logs tail /aws/lambda/dev-atlantis-ai-reviewer --since 10m --region ap-northeast-2
-
-# SQS 큐 메시지 확인
-aws sqs get-queue-attributes \
-  --queue-url https://sqs.ap-northeast-2.amazonaws.com/ACCOUNT/dev-atlantis-ai-reviews \
-  --attribute-names ApproximateNumberOfMessages --region ap-northeast-2
+# 저장소 클론
+git clone https://github.com/ryu-qqq/stackkit.git
+cd stackkit
+
+# 개발용 브랜치 생성
+git checkout -b feature/my-improvement
+
+# 변경사항 작성 후 테스트
+./quick-start.sh --dry-run --org test --github-token ghp_xxx --openai-key sk-xxx
 ```
 
 ---
