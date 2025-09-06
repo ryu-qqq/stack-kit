@@ -1,0 +1,244 @@
+# =======================================
+# 프로젝트별 Atlantis 설정
+# 저장소 루트에 배치할 파일
+# =======================================
+
+version: 3
+
+# 프로젝트 정의
+projects:
+- name: infrastructure
+  dir: .
+  
+  # 자동 계획 실행
+  autoplan:
+    when_modified: 
+      - "*.tf"
+      - "**/*.tf"
+      - "*.tfvars"
+      - "terraform.tfvars"
+    enabled: true
+  
+  # 적용 전 필수 요구사항
+  apply_requirements:
+    - "approved"        # PR 승인 필수
+    - "mergeable"       # 머지 가능 상태
+  
+  # 고도화된 워크플로우 사용
+  workflow: infracost-enhanced
+  
+  # Terraform 작업 공간
+  terraform_version: v1.7.5
+  
+  # 삭제 방지
+  delete_source_branch_on_merge: false
+
+# 환경별 프로젝트 (선택사항)
+- name: dev-environment
+  dir: .
+  workspace: dev
+  autoplan:
+    when_modified: ["*.tf", "**/*.tf"]
+    enabled: true
+  apply_requirements: ["mergeable"]  # 개발환경은 승인 불요
+  workflow: infracost-enhanced
+
+- name: staging-environment
+  dir: .
+  workspace: staging
+  autoplan:
+    when_modified: ["*.tf", "**/*.tf"]
+    enabled: true
+  apply_requirements: ["approved", "mergeable"]
+  workflow: infracost-enhanced
+
+- name: prod-environment
+  dir: .
+  workspace: prod
+  autoplan:
+    when_modified: ["*.tf", "**/*.tf"]
+    enabled: false  # 프로덕션은 수동 계획
+  apply_requirements: 
+    - "approved"
+    - "mergeable"
+  workflow: infracost-enhanced
+
+# 글로벌 워크플로우 정의
+workflows:
+  infracost-enhanced:
+    plan:
+      steps:
+      # Terraform 기본 단계
+      - env:
+          name: TF_IN_AUTOMATION
+          value: "true"
+      - env:
+          name: TF_INPUT
+          value: "false"
+      
+      - init
+      - plan:
+          extra_args: ["-out", "$PLANFILE"]
+      
+      # 고급 분석 단계
+      - run: |
+          echo "🔍 Terraform 계획 분석 중..."
+          
+          # JSON 계획 파일 생성
+          terraform show -json $PLANFILE > $SHOWFILE
+          
+          # 리소스 변경 사항 요약
+          echo "📊 리소스 변경 사항:"
+          terraform show -json $PLANFILE | jq -r '
+            if .resource_changes then
+              .resource_changes | 
+              group_by(.change.actions[0]) | 
+              map({
+                action: .[0].change.actions[0], 
+                count: length,
+                resources: [.[].address]
+              }) |
+              .[] | "  \(.action): \(.count)개 리소스"
+            else
+              "  변경사항 없음"
+            end'
+          
+          echo "✅ 계획 분석 완료"
+      
+      # Infracost 비용 분석
+      - run: |
+          if [ -n "$INFRACOST_API_KEY" ]; then
+            echo "💰 비용 분석 시작..."
+            
+            # Infracost 설정
+            infracost configure set api_key $INFRACOST_API_KEY
+            
+            # 현재 비용 분석
+            infracost breakdown \
+              --path $SHOWFILE \
+              --format table \
+              --show-skipped \
+              | tee current_cost.txt
+            
+            # 베이스라인과 비교 (있는 경우)
+            if [ -f "infracost-base.json" ]; then
+              echo "📈 비용 변경사항 분석..."
+              infracost diff \
+                --path $SHOWFILE \
+                --compare-to infracost-base.json \
+                --format table \
+                | tee cost_diff.txt
+            fi
+            
+            # GitHub 댓글 작성
+            infracost comment github \
+              --path $SHOWFILE \
+              --repo "$BASE_REPO_OWNER/$BASE_REPO_NAME" \
+              --pull-request $PULL_NUM \
+              --github-token $ATLANTIS_GH_TOKEN \
+              --behavior update 2>/dev/null || echo "💬 비용 댓글 작성 건너뛰기"
+            
+            echo "✅ 비용 분석 완료"
+          else
+            echo "⚠️ Infracost API 키 없음 - 비용 분석 건너뛰기"
+          fi
+      
+      # 보안 검사 (간단한 버전)
+      - run: |
+          echo "🔐 기본 보안 검사..."
+          
+          # 기본 보안 패턴 검사
+          if grep -r "password\|secret\|key" *.tf *.tfvars 2>/dev/null | grep -v "variable\|description\|arn"; then
+            echo "⚠️ 하드코딩된 시크릿 가능성 발견"
+          fi
+          
+          echo "✅ 기본 보안 검사 완료"
+      
+      # AI 리뷰 시스템 연동
+      - run: |
+          echo "🤖 AI 계획 리뷰 시작..."
+          
+          # AI 리뷰용 S3 버킷이 설정된 경우만 실행
+          if [ -n "$AI_REVIEW_BUCKET" ]; then
+            # 리뷰용 메타데이터 생성
+            cat > review_metadata.json << EOF
+          {
+            "pull_request": {
+              "number": $PULL_NUM,
+              "title": "$PULL_TITLE",
+              "base_branch": "$BASE_BRANCH_NAME",
+              "head_branch": "$HEAD_BRANCH_NAME",
+              "author": "$PULL_AUTHOR"
+            },
+            "repository": {
+              "owner": "$BASE_REPO_OWNER", 
+              "name": "$BASE_REPO_NAME",
+              "full_name": "$BASE_REPO_FULL_NAME"
+            },
+            "terraform": {
+              "version": "$(terraform version -json | jq -r .terraform_version)",
+              "workspace": "$WORKSPACE",
+              "project": "$PROJECT_NAME"
+            },
+            "analysis": {
+              "timestamp": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+              "plan_file": "$PLANFILE",
+              "show_file": "$SHOWFILE"
+            }
+          }
+          EOF
+          
+            # S3에 계획 파일 업로드 (AI 리뷰 트리거)
+            REVIEW_KEY="terraform-plans/$BASE_REPO_OWNER-$BASE_REPO_NAME/pr-$PULL_NUM/$(date +%Y%m%d-%H%M%S).json"
+            
+            # 리뷰 패키지 생성
+            jq -n \
+              --argjson metadata "$(cat review_metadata.json)" \
+              --argjson plan "$(cat $SHOWFILE)" \
+              '{
+                metadata: $metadata,
+                terraform_plan: $plan,
+                review_request_id: ($metadata.pull_request.number | tostring) + "-" + ($metadata.analysis.timestamp)
+              }' > ai_review_package.json
+            
+            # S3 업로드 (Lambda 트리거)
+            aws s3 cp ai_review_package.json "s3://$AI_REVIEW_BUCKET/$REVIEW_KEY" \
+              --metadata "pr-number=$PULL_NUM,repo=$BASE_REPO_FULL_NAME,timestamp=$(date +%s)" \
+              2>/dev/null || echo "⚠️ AI 리뷰 업로드 실패 - 리뷰 건너뛰기"
+            
+            echo "📤 AI 리뷰 요청 전송: s3://$AI_REVIEW_BUCKET/$REVIEW_KEY"
+            echo "🤖 AI 리뷰가 별도로 PR에 댓글로 제공됩니다"
+            
+          else
+            echo "ℹ️ AI_REVIEW_BUCKET 설정 없음 - AI 리뷰 건너뛰기"
+          fi
+          
+          echo "✅ AI 리뷰 연동 완료"
+
+    apply:
+      steps:
+      - apply
+      
+      # 적용 후 처리
+      - run: |
+          echo "🎉 배포 완료!"
+          echo "⏰ 완료 시간: $(date)"
+          
+          # 비용 베이스라인 업데이트
+          if [ -f "$SHOWFILE" ] && [ -n "$INFRACOST_API_KEY" ]; then
+            echo "📊 비용 베이스라인 업데이트..."
+            cp $SHOWFILE infracost-base.json
+            
+            # 최종 비용 정보
+            infracost breakdown --path $SHOWFILE --format json > final-cost.json
+            MONTHLY_COST=$(cat final-cost.json | jq -r '.totalMonthlyCost // "알 수 없음"')
+            echo "💰 월간 예상 비용: ${MONTHLY_COST} USD"
+          fi
+          
+          echo "✅ 후처리 작업 완료"
+
+# Atlantis 서버 설정
+automerge: false
+delete_source_branch_on_merge: false
+parallel_plan: 2
+parallel_apply: 1

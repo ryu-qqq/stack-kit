@@ -1,0 +1,46 @@
+# Shared configuration for all Terraform workflows
+# Version: 1.0.0
+
+terraform:
+  version: "1.7.5"
+  
+aws:
+  default_region: "ap-northeast-2"
+  
+security:
+  allowed_actions:
+    - "hashicorp/setup-terraform@v3"
+    - "actions/checkout@v4"
+    - "aws-actions/configure-aws-credentials@v4"
+    - "actions/cache@v4"
+    - "actions/upload-artifact@v4"
+    - "marocchino/sticky-pull-request-comment@v2"
+  
+  required_secrets:
+    dev:
+      - "TF_DEV_ROLE_ARN"
+      - "AWS_ACCOUNT_ID"
+      - "AWS_REGION"
+    prod:
+      - "TF_PROD_ROLE_ARN"
+      - "AWS_ACCOUNT_ID"
+      - "AWS_REGION"
+      
+performance:
+  cache:
+    terraform_providers: true
+    tools: true
+  parallel_execution: true
+  max_parallel_jobs: 3
+  
+quality:
+  tools:
+    tflint: "latest"
+    tfsec: "latest"
+    checkov: "latest"
+    infracost: "optional"
+  
+validation:
+  required_files:
+    - "backend.hcl"
+    - "terraform.tfvars or {env}.tfvars"
