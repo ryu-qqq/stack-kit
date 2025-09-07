@@ -531,8 +531,11 @@ resource "aws_ecs_task_definition" "atlantis" {
   container_definitions = jsonencode([
     {
       name    = "atlantis"
-      image   = "runatlantis/atlantis:latest" # 최신 안정 버전
-      command = ["atlantis", "server"]
+      image   = "runatlantis/atlantis:latest" # 안정적인 공식 버전
+      command = [
+        "sh", "-c", 
+        "mkdir -p /atlantis/bin && curl -fsSL https://github.com/jqlang/jq/releases/latest/download/jq-linux-amd64 -o /atlantis/bin/jq && chmod +x /atlantis/bin/jq && curl -fsSL https://releases.hashicorp.com/terraform/1.7.5/terraform_1.7.5_linux_amd64.zip -o /tmp/terraform.zip && unzip -o /tmp/terraform.zip -d /tmp && chmod +x /tmp/terraform && cp /tmp/terraform /atlantis/bin/terraform1.7.5 && cp /tmp/terraform /atlantis/bin/terraform && (curl -fsSL https://github.com/infracost/infracost/releases/latest/download/infracost-linux-amd64.tar.gz | tar -xz -C /tmp && chmod +x /tmp/infracost-linux-amd64 && cp /tmp/infracost-linux-amd64 /atlantis/bin/infracost || echo 'Infracost installation failed, continuing without it') && export PATH=/atlantis/bin:/tmp:$PATH && atlantis server"
+      ]
       user    = "1000:1000"
 
       portMappings = [
@@ -575,16 +578,25 @@ resource "aws_ecs_task_definition" "atlantis" {
           name  = "ATLANTIS_ALLOW_REPO_CONFIG"
           value = "true"
         },
-        ], var.enable_infracost ? [
-        {
-          name  = "ATLANTIS_ENABLE_POLICY_CHECKS"
-          value = "true"
-        },
-        {
-          name  = "INFRACOST_ENABLE_CLOUD"
-          value = "true"
-        }
-      ] : [])
+        ],
+        [
+          {
+            name  = "ATLANTIS_ENABLE_POLICY_CHECKS"
+            value = "true"
+          },
+          {
+            name  = "INFRACOST_ENABLE_CLOUD"
+            value = "true"
+          },
+          {
+            name  = "INFRACOST_ENABLE_DASHBOARD"
+            value = "true"
+          },
+          {
+            name  = "PATH"
+            value = "/atlantis/bin:/tmp:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+          }
+        ])
 
       secrets = concat([
         {
@@ -598,13 +610,12 @@ resource "aws_ecs_task_definition" "atlantis" {
         {
           name      = "SLACK_WEBHOOK_URL"
           valueFrom = "${aws_secretsmanager_secret.atlantis.arn}:slack_webhook_url::"
-        }
-        ], var.enable_infracost ? [
+        },
         {
           name      = "INFRACOST_API_KEY"
           valueFrom = "${aws_secretsmanager_secret.atlantis.arn}:infracost_api_key::"
         }
-      ] : [])
+      ])
 
       logConfiguration = {
         logDriver = "awslogs"
