@@ -28,7 +28,7 @@ projects:
   workflow: infracost-enhanced
   
   # Terraform 작업 공간
-  terraform_version: v1.7.5
+  terraform_version: v1.12.2
   
   # 삭제 방지
   delete_source_branch_on_merge: false
@@ -105,38 +105,64 @@ workflows:
           
           echo "✅ 계획 분석 완료"
       
-      # Infracost 비용 분석
+      # Infracost 비용 분석 (수정된 버전)
       - run: |
           if [ -n "$INFRACOST_API_KEY" ]; then
             echo "💰 비용 분석 시작..."
             
             # Infracost 설정
-            infracost configure set api_key $INFRACOST_API_KEY
+            infracost configure set api_key $INFRACOST_API_KEY || echo "⚠️ API 키 파일 설정 실패 (환경변수로 대체)"
             
-            # 현재 비용 분석
+            # 현재 비용 분석 (plan 파일 사용)
+            echo "📋 현재 Plan 분석: $PLANFILE"
             infracost breakdown \
-              --path $SHOWFILE \
+              --path $PLANFILE \
               --format table \
               --show-skipped \
               | tee current_cost.txt
+            
+            # GitHub 댓글용 JSON 생성
+            echo "📝 GitHub 댓글용 JSON 생성..."
+            infracost breakdown \
+              --path $PLANFILE \
+              --format json \
+              --out-file current_cost.json
             
             # 베이스라인과 비교 (있는 경우)
             if [ -f "infracost-base.json" ]; then
               echo "📈 비용 변경사항 분석..."
               infracost diff \
-                --path $SHOWFILE \
+                --path $PLANFILE \
                 --compare-to infracost-base.json \
-                --format table \
+                --format diff \
                 | tee cost_diff.txt
+                
+              # diff용 JSON 생성 (GitHub 댓글용)
+              infracost diff \
+                --path $PLANFILE \
+                --compare-to infracost-base.json \
+                --format json \
+                --out-file cost_diff.json
+                
+              COMMENT_PATH="cost_diff.json"
+            else
+              echo "ℹ️ 베이스라인 없음 - 현재 비용만 표시"
+              COMMENT_PATH="current_cost.json"
             fi
             
-            # GitHub 댓글 작성
-            infracost comment github \
-              --path $SHOWFILE \
-              --repo "$BASE_REPO_OWNER/$BASE_REPO_NAME" \
-              --pull-request $PULL_NUM \
-              --github-token $ATLANTIS_GH_TOKEN \
-              --behavior update 2>/dev/null || echo "💬 비용 댓글 작성 건너뛰기"
+            # GitHub 댓글 작성 (JSON 파일 사용)
+            if [ -f "$COMMENT_PATH" ] && [ -n "$ATLANTIS_GH_TOKEN" ]; then
+              echo "💬 GitHub 댓글 작성 중..."
+              infracost comment github \
+                --path "$COMMENT_PATH" \
+                --repo "$BASE_REPO_OWNER/$BASE_REPO_NAME" \
+                --pull-request $PULL_NUM \
+                --github-token $ATLANTIS_GH_TOKEN \
+                --behavior update \
+                --show-skipped 2>/dev/null && echo "✅ 비용 댓글 작성 완료" || echo "⚠️ 비용 댓글 작성 실패"
+            else
+              echo "ℹ️ GitHub 토큰 없음 - 댓글 작성 건너뛰기"
+            fi
             
             echo "✅ 비용 분석 완료"
           else
@@ -225,12 +251,13 @@ workflows:
           echo "⏰ 완료 시간: $(date)"
           
           # 비용 베이스라인 업데이트
-          if [ -f "$SHOWFILE" ] && [ -n "$INFRACOST_API_KEY" ]; then
+          if [ -f "$PLANFILE" ] && [ -n "$INFRACOST_API_KEY" ]; then
             echo "📊 비용 베이스라인 업데이트..."
-            cp $SHOWFILE infracost-base.json
             
-            # 최종 비용 정보
-            infracost breakdown --path $SHOWFILE --format json > final-cost.json
+            # 최종 비용 정보 (plan 파일 직접 사용)
+            infracost breakdown --path $PLANFILE --format json > final-cost.json
+            cp final-cost.json infracost-base.json
+            
             MONTHLY_COST=$(cat final-cost.json | jq -r '.totalMonthlyCost // "알 수 없음"')
             echo "💰 월간 예상 비용: ${MONTHLY_COST} USD"
           fi

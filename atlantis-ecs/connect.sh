@@ -820,9 +820,10 @@ workflows:
             # Infracost는 디렉토리를 스캔하거나 terraform show -json 출력을 사용
             echo "📂 Infracost를 위한 plan 준비 중..."
             
-            # Plan 파일 직접 사용 (Infracost가 이제 지원함)
-            INFRACOST_INPUT="\$PLANFILE"
-            echo "  📋 Plan 파일 직접 사용: \$INFRACOST_INPUT"
+            # 디렉토리 스캔 우선 사용 (Terraform 1.7.5 JSON 버전 호환성 문제로 인해)
+            INFRACOST_INPUT="."
+            echo "  📂 디렉토리 스캔 사용: \$INFRACOST_INPUT"
+            echo "  ℹ️  Terraform 1.7.5 JSON 형식이 Infracost 지원 버전(0.2)과 호환되지 않아 디렉토리 스캔 사용"
             
             # Configure Infracost (안전장치 추가)
             echo "🔧 Infracost 설정 중..."
@@ -870,40 +871,46 @@ workflows:
             
             # Check for cost difference if baseline exists
             if [ -f "infracost-base.json" ]; then
-              COST_DIFF_JSON=\$(infracost diff --path "\$INFRACOST_INPUT" --compare-to infracost-base.json --format json 2>/dev/null || echo '{}')
+              echo "  📊 비용 차이 분석 중..."
               set +e
-              COST_DIFF=\$(echo "\$COST_DIFF_JSON" | jq -r '.diffTotalMonthlyCost // "0"' 2>/dev/null)
+              DIFF_JSON=\$(infracost diff --path \$INFRACOST_INPUT --compare-to infracost-base.json --format json 2>&1)
+              DIFF_EXIT_CODE=\$?
               set -e
-              COST_DIFF=\${COST_DIFF:-0}
               
-              if [[ "\$COST_DIFF" != "0" ]]; then
-                COST_INFO="💰 월간 비용: \$MONTHLY_COST USD (변화: \$COST_DIFF USD)"
+              if [ \$DIFF_EXIT_CODE -eq 0 ]; then
+                echo "    ✅ 비용 차이 분석 성공"
+                COST_DIFF=\$(echo "\$DIFF_JSON" | jq -r '.diffTotalMonthlyCost // "0"' 2>/dev/null)
+                COST_INFO="💰 월간 비용: \$MONTHLY_COST USD (변경: \$COST_DIFF USD)"
               else
+                echo "    ⚠️ 비용 차이 분석 실패, 기본 비용만 표시"
                 COST_INFO="💰 월간 비용: \$MONTHLY_COST USD"
               fi
             else
               COST_INFO="💰 월간 비용: \$MONTHLY_COST USD"
             fi
             
-            # Generate GitHub comment
+            # Generate GitHub comment - JSON 결과를 임시 파일로 저장하여 사용
             echo "💬 GitHub 댓글 생성 중..."
-            # set -e 로 인한 스크립트 종료 방지
+            TEMP_INFRACOST_FILE="/tmp/infracost-\$\$.json"
+            echo "\$COST_JSON" > "\$TEMP_INFRACOST_FILE"
+            
             set +e
-            # 디렉토리 스캔 모드 사용
-            COMMENT_OUTPUT=\$(infracost comment github \\
-              --path "\$INFRACOST_INPUT" \\
+            infracost comment github \\
+              --path "\$TEMP_INFRACOST_FILE" \\
               --repo "\$BASE_REPO_OWNER/\$BASE_REPO_NAME" \\
               --pull-request \$PULL_NUM \\
-              --github-token "\$ATLANTIS_GH_TOKEN" \\
-              --behavior update 2>&1)
-            COMMENT_EXIT=\$?
+              --github-token \$ATLANTIS_GH_TOKEN \\
+              --behavior update 2>/dev/null
+            COMMENT_EXIT_CODE=\$?
             set -e
             
-            if [ \$COMMENT_EXIT -eq 0 ]; then
-              echo "  ✅ GitHub 댓글 생성 성공"
+            # 임시 파일 정리
+            rm -f "\$TEMP_INFRACOST_FILE"
+            
+            if [ \$COMMENT_EXIT_CODE -eq 0 ]; then
+              echo "  ✅ GitHub 댓글 작성 성공"
             else
-              echo "  ⚠️ Infracost GitHub 댓글 건너뛰기"
-              echo "  이유: \$(echo "\$COMMENT_OUTPUT" | head -n 1)"
+              echo "  ⚠️ GitHub 댓글 작성 실패 (권한 또는 네트워크 문제 가능)"
             fi
             
             echo "✅ 비용 분석 완료: \$COST_INFO"
