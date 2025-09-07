@@ -13,16 +13,18 @@ StackKit은 팀이 5분만에 자신만의 Atlantis 구축하여 안전하고 �
 git clone https://github.com/ryu-qqq/stackkit.git
 cd stackkit
 
-# 2. 5분 자동 배포 (5분)
-./quick-start.sh \
+# 2. Atlantis 서버 배포 (5분)
+cd atlantis-ecs
+./quick-deploy.sh \
   --org mycompany \
   --github-token ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx \
   --slack-webhook https://hooks.slack.com/services/xxx/xxx/xxx \
-  --use-existing-vpc  # EIP 한계 방지를 위한 기존 VPC 사용
+  --vpc-id vpc-12345678  # 기존 VPC 사용 (권장)
 
 # 3. 기존 저장소 연결 (1분)
-curl -sSL https://github.com/ryu-qqq/stackkit/raw/main/connect.sh | \
-  bash -s -- --atlantis-url http://mycompany-atlantis.aws.com
+./connect.sh --atlantis-url http://mycompany-atlantis.aws.com \
+  --repo-name myorg/myrepo \
+  --github-token ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
 
 ```
 
@@ -35,30 +37,33 @@ curl -sSL https://github.com/ryu-qqq/stackkit/raw/main/connect.sh | \
 
 ## ⚙️ 고급 옵션
 
-### VPC 설정 (EIP 한계 해결)
+### VPC 설정 (기존 VPC 활용)
 ```bash
 # 기존 VPC 사용 (권장: EIP 한계 방지)
-./quick-start.sh --org mycompany \
-  --github-token xxx --openai-key xxx \
-  --use-existing-vpc \
+cd atlantis-ecs
+./quick-deploy.sh --org mycompany \
+  --github-token ghp_xxx \
   --vpc-id vpc-12345678 \
-  --subnet-ids "subnet-abc123,subnet-def456"
+  --public-subnets "subnet-abc123,subnet-def456"
 ```
 
-### 리소스 충돌 처리
+### AI 리뷰어 활성화 (실험적 기능)
 ```bash
-# 충돌 검사 건너뛰기 (고급 사용자용)
-./quick-start.sh --org mycompany \
-  --github-token xxx --openai-key xxx \
-  --skip-conflicts
+# AI 기반 Terraform 계획 자동 분석
+./quick-deploy.sh --org mycompany \
+  --github-token ghp_xxx \
+  --enable-ai-reviewer \
+  --openai-key sk-xxxxxxxxxxxx \
+  --slack-webhook https://hooks.slack.com/services/xxx/xxx/xxx
 ```
 
-### 배포 시뮬레이션
+### HTTPS 도메인 설정
 ```bash
-# 실제 배포 없이 계획만 확인
-./quick-start.sh --org mycompany \
-  --github-token xxx --openai-key xxx \
-  --dry-run
+# 커스텀 도메인과 SSL 인증서
+./quick-deploy.sh --org mycompany \
+  --github-token ghp_xxx \
+  --custom-domain atlantis.mycompany.com \
+  --certificate-arn arn:aws:acm:ap-northeast-2:123456:certificate/xxx
 ```
 
 ## 🔧 필요한 준비물 (5분)
@@ -85,6 +90,25 @@ export AWS_SECRET_ACCESS_KEY=your-secret
 ```bash
 # Slack → Apps → Incoming Webhooks
 # Add to Slack → 채널 선택 → Webhook URL 복사
+```
+
+### 4. Infracost 비용 분석 (권장)
+```bash
+# 🎁 무료 플랜으로 시작하기
+# https://infracost.io에서 무료 API 키 생성
+# 회원가입 → API 키 → 환경변수 설정
+export INFRACOST_API_KEY="ico-your-key-here"
+
+# 💰 Infracost 무료 플랜 정보
+# - 월 1,000회 추정 무료 (소규모 팀에 충분)
+# - PR당 비용 차이 자동 계산
+# - 클라우드 대시보드 접근
+# - Slack/GitHub 통합
+# - 신용카드 불필요
+
+# StackKit 자동 설치 방식
+# 공식 Atlantis 이미지에 Infracost를 런타임에 설치
+# 별도의 컨테이너 이미지 빌드 불필요
 ```
 
 ---
@@ -118,37 +142,35 @@ export AWS_SECRET_ACCESS_KEY=your-secret
 
 ### 사용자 정의 도메인 설정
 ```bash
-./quick-start.sh --org mycompany \
-  --github-token ghp_xxx --openai-key sk-xxx \
+cd atlantis-ecs
+./quick-deploy.sh --org mycompany \
+  --github-token ghp_xxx \
   --custom-domain atlantis.mycompany.com \
   --certificate-arn arn:aws:acm:ap-northeast-2:123:certificate/xxx
 ```
 
 ### 프로덕션 환경 배포 (기존 VPC 사용 권장)
 ```bash
-./quick-start.sh --org enterprise --environment prod \
-  --github-token ghp_xxx --openai-key sk-xxx \
-  --aws-region us-west-2 \
-  --use-existing-vpc --vpc-id vpc-prod123 \
-  --subnet-ids "subnet-prod1,subnet-prod2"
+cd atlantis-ecs
+./quick-deploy.sh --org enterprise \
+  --github-token ghp_xxx \
+  --vpc-id vpc-prod123 \
+  --public-subnets "subnet-prod1,subnet-prod2" \
+  --private-subnets "subnet-prod3,subnet-prod4" \
+  --environment prod
 ```
 
-### 리소스 충돌 문제 해결
+### 완전한 설정 예시 (모든 기능 활성화)
 ```bash
-# EIP 한계 도달 시
-./quick-start.sh --org mycompany \
-  --github-token ghp_xxx --openai-key sk-xxx \
-  --use-existing-vpc
-
-# CloudWatch 로그 그룹 충돌 시
-./quick-start.sh --org mycompany \
-  --github-token ghp_xxx --openai-key sk-xxx \
-  --skip-conflicts
-
-# 배포 전 체크
-./quick-start.sh --org mycompany \
-  --github-token ghp_xxx --openai-key sk-xxx \
-  --dry-run
+cd atlantis-ecs
+./quick-deploy.sh --org enterprise \
+  --github-token ghp_xxx \
+  --vpc-id vpc-12345678 \
+  --custom-domain atlantis.enterprise.com \
+  --certificate-arn arn:aws:acm:ap-northeast-2:123456:certificate/xxx \
+  --enable-ai-reviewer \
+  --openai-key sk-xxxxxxxxxxxx \
+  --slack-webhook https://hooks.slack.com/services/xxx/xxx/xxx
 ```
 
 ### 여러 저장소 일괄 연결
@@ -158,11 +180,15 @@ echo "mycompany/backend-infra
 mycompany/frontend-infra  
 mycompany/data-infra" > repos.txt
 
+# Atlantis URL 설정 (배포 후 ALB DNS 또는 커스텀 도메인)
+ATLANTIS_URL="https://mycompany-atlantis-alb-123456789.ap-northeast-2.elb.amazonaws.com"
+
 # 모든 저장소에 대해 연결 스크립트 실행
+cd atlantis-ecs
 while read repo; do
-  cd "../$repo"
-  curl -sSL https://github.com/ryu-qqq/stackkit/raw/main/connect.sh | \
-    bash -s -- --atlantis-url http://mycompany-atlantis.aws.com
+  ./connect.sh --atlantis-url "$ATLANTIS_URL" \
+    --repo-name "$repo" \
+    --github-token ghp_xxx
 done < repos.txt
 ```
 
@@ -208,6 +234,26 @@ aws iam attach-user-policy --user-name your-user --policy-arn arn:aws:iam::aws:p
 ```bash
 # 토큰 권한 확인
 # repo (전체), admin:repo_hook 권한이 필요합니다
+```
+
+**Q: Infracost 비용 분석이 작동하지 않아요**
+```bash
+# StackKit은 Infracost 공식 이미지를 사용하므로 바이너리 문제 없음
+# ghcr.io/infracost/infracost-atlantis:atlantis-latest
+
+# Infracost 사용하려면:
+# 1. API 키 설정 (필수)
+export INFRACOST_API_KEY="ico-your-key-here"
+
+# 2. Secrets Manager에 API 키 추가
+aws secretsmanager update-secret \
+  --secret-id your-atlantis-secrets \
+  --secret-string '{"infracost_api_key": "ico-your-key-here"}'
+
+# 3. ECS에서 자동으로 활성화됨
+# - Plan 시 비용 분석 자동 실행
+# - GitHub PR에 비용 댓글 자동 생성
+# - Slack 알림에 비용 정보 포함
 ```
 
 ---

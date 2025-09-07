@@ -7,9 +7,9 @@ StackKit 기반의 프로덕션급 Atlantis 서버 배포 솔루션입니다. AW
 ### 주요 기능
 
 - 🚀 **원클릭 배포**: `quick-deploy.sh`로 5분 내 완전 자동 설정
-- 🔗 **저장소 연결**: `connect.sh`로 기존 Atlantis 서버에 프로젝트 연결
-- 🤖 **AI 리뷰어**: OpenAI 기반 Terraform 계획 자동 분석 (실험적 기능)
-- 💰 **비용 분석**: Infracost 통합으로 PR에서 실시간 비용 분석
+- 🔗 **저장소 연결**: `connect.sh`로 기존 Atlantis 서버에 프로젝트 연결  
+- 💰 **비용 분석**: Infracost 자동 설치로 PR에서 실시간 비용 분석 (무료 플랜 지원)
+- 📊 **고급 워크플로우**: 향상된 Slack 알림과 Plan 요약
 - 🏗️ **StackKit 호환**: StackKit 표준 변수 및 모듈 완전 지원
 - 🔒 **보안 강화**: AWS Secrets Manager, VPC 격리, HTTPS 강제
 
@@ -187,6 +187,57 @@ INFRACOST_API_KEY=ico-xxx         # Infracost API 키
 ./connect.sh --atlantis-url https://atlantis.company.com \
   --repo-name myorg/myrepo \
   --skip-webhook
+```
+
+## 💰 Infracost 비용 분석 통합
+
+### 개요
+StackKit은 공식 Atlantis 이미지에 Infracost를 자동으로 설치하여 PR에서 실시간 비용 분석을 제공합니다.
+
+### 🎁 무료 플랜 혜택
+- **월 100회 추정 무료**: 소규모 개발팀에 충분한 용량
+- **PR당 비용 차이 계산**: 변경 전후 비용 자동 비교
+- **클라우드 대시보드**: 웹 기반 비용 추세 분석
+- **팀 협업 기능**: 여러 팀원이 함께 사용 가능
+- **신용카드 불필요**: 무료로 시작, 필요시 업그레이드
+
+### 설정 방법
+```bash
+# 1. Infracost 가입 및 API 키 발급
+# https://www.infracost.io 접속 → Sign Up → API Keys
+
+# 2. API 키 환경변수 설정
+export INFRACOST_API_KEY="ico-xxxxxxxxxxxx"
+
+# 3. Atlantis 배포 시 자동 활성화
+./quick-deploy.sh --org mycompany --github-token ghp_xxx \
+  --infracost-key ico-xxxxxxxxxxxx
+```
+
+### 작동 방식
+1. **자동 설치**: Atlantis 컨테이너 시작 시 Infracost 바이너리 자동 다운로드
+2. **Plan 통합**: `terraform plan` 실행 후 자동으로 비용 분석
+3. **PR 댓글**: 비용 차이를 표로 정리하여 PR에 댓글 작성
+4. **대시보드 연동**: Infracost Cloud에서 비용 추세 확인
+
+### PR에서 보이는 정보
+```markdown
+💰 Infracost Cost Estimate
+
+Monthly cost will increase by $125.43 (+15%)
+
+| Resource | Before | After | Diff |
+|----------|---------|--------|------|
+| aws_instance.web | $50.00 | $100.00 | +$50.00 |
+| aws_rds_instance.db | $200.00 | $275.43 | +$75.43 |
+| **Total** | **$835.00** | **$960.43** | **+$125.43** |
+```
+
+### 고급 설정
+```bash
+# 환경변수로 추가 옵션 설정
+export INFRACOST_ENABLE_CLOUD=true      # 클라우드 대시보드 활성화
+export INFRACOST_ENABLE_DASHBOARD=true  # 웹 대시보드 활성화
 ```
 
 ## 🤖 AI 리뷰어 (실험적 기능)
