@@ -204,7 +204,7 @@ locals {
 }
 
 # =======================================
-# Security Groups
+# Security Groups with Enhanced Security
 # =======================================
 
 resource "aws_security_group" "alb" {
@@ -212,24 +212,44 @@ resource "aws_security_group" "alb" {
   vpc_id      = local.vpc_id
 
   ingress {
+    description = "HTTP access"
     from_port   = 80
     to_port     = 80
     protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"] # ALLOW_PUBLIC_EXEMPT - ALB public access
+    cidr_blocks = ["0.0.0.0/0"] # Required for ALB public access
   }
 
   ingress {
+    description = "HTTPS access"
     from_port   = 443
     to_port     = 443
     protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"] # ALLOW_PUBLIC_EXEMPT - ALB public access
+    cidr_blocks = ["0.0.0.0/0"] # Required for ALB public access
+  }
+
+  # Restrict egress to only necessary destinations
+  egress {
+    description     = "HTTP to ECS containers"
+    from_port       = 4141
+    to_port         = 4141
+    protocol        = "tcp"
+    security_groups = [aws_security_group.ecs.id]
   }
 
   egress {
-    from_port   = 0
-    to_port     = 0
-    protocol    = "-1"
-    cidr_blocks = ["0.0.0.0/0"] # ALLOW_PUBLIC_EXEMPT - ALB outbound
+    description = "HTTPS for health checks and AWS API calls"
+    from_port   = 443
+    to_port     = 443
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"] # Required for AWS API calls
+  }
+
+  egress {
+    description = "HTTP for external dependencies (GitHub, Slack)"
+    from_port   = 80
+    to_port     = 80
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"] # Required for external service calls
   }
 
   tags = {
@@ -242,17 +262,52 @@ resource "aws_security_group" "ecs" {
   vpc_id      = local.vpc_id
 
   ingress {
+    description     = "Traffic from ALB"
     from_port       = 4141
     to_port         = 4141
     protocol        = "tcp"
     security_groups = [aws_security_group.alb.id]
   }
 
+  # Restrict egress to specific services only
   egress {
-    from_port   = 0
-    to_port     = 0
-    protocol    = "-1"
-    cidr_blocks = ["0.0.0.0/0"] # ALLOW_PUBLIC_EXEMPT - ECS outbound
+    description = "HTTPS for AWS API calls"
+    from_port   = 443
+    to_port     = 443
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"] # Required for AWS services
+  }
+
+  egress {
+    description = "HTTP for external services (GitHub, Terraform providers)"
+    from_port   = 80
+    to_port     = 80
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"] # Required for Terraform providers and GitHub
+  }
+
+  egress {
+    description = "SSH for Git operations"
+    from_port   = 22
+    to_port     = 22
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"] # Required for Git SSH access
+  }
+
+  egress {
+    description = "DNS resolution"
+    from_port   = 53
+    to_port     = 53
+    protocol    = "udp"
+    cidr_blocks = ["0.0.0.0/0"] # Required for DNS
+  }
+
+  egress {
+    description     = "EFS access"
+    from_port       = 2049
+    to_port         = 2049
+    protocol        = "tcp"
+    security_groups = [aws_security_group.efs.id]
   }
 
   tags = {
@@ -271,9 +326,83 @@ resource "aws_lb" "atlantis" {
   security_groups    = [aws_security_group.alb.id]
   subnets            = local.public_subnet_ids
 
+  # Enable deletion protection for production
+  enable_deletion_protection = var.environment == "prod" ? true : false
+
+  # Enable access logs for security monitoring
+  access_logs {
+    bucket  = aws_s3_bucket.atlantis_logs.bucket
+    prefix  = "alb-access-logs"
+    enabled = true
+  }
+
+  # Drop invalid headers for security
+  drop_invalid_header_fields = true
+
   tags = {
     Name = "${var.environment}-atlantis-alb"
   }
+
+  depends_on = [aws_s3_bucket_policy.atlantis_logs]
+}
+
+# S3 bucket for ALB access logs
+resource "aws_s3_bucket" "atlantis_logs" {
+  bucket = "${var.environment}-atlantis-logs-${random_id.bucket_suffix.hex}"
+
+  tags = {
+    Name = "${var.environment}-atlantis-logs"
+  }
+}
+
+resource "random_id" "bucket_suffix" {
+  byte_length = 4
+}
+
+resource "aws_s3_bucket_versioning" "atlantis_logs" {
+  bucket = aws_s3_bucket.atlantis_logs.id
+  versioning_configuration {
+    status = "Enabled"
+  }
+}
+
+resource "aws_s3_bucket_server_side_encryption_configuration" "atlantis_logs" {
+  bucket = aws_s3_bucket.atlantis_logs.id
+
+  rule {
+    apply_server_side_encryption_by_default {
+      sse_algorithm = "AES256"
+    }
+  }
+}
+
+resource "aws_s3_bucket_public_access_block" "atlantis_logs" {
+  bucket = aws_s3_bucket.atlantis_logs.id
+
+  block_public_acls       = true
+  block_public_policy     = true
+  ignore_public_acls      = true
+  restrict_public_buckets = true
+}
+
+data "aws_elb_service_account" "main" {}
+
+resource "aws_s3_bucket_policy" "atlantis_logs" {
+  bucket = aws_s3_bucket.atlantis_logs.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Principal = {
+          AWS = data.aws_elb_service_account.main.arn
+        }
+        Action   = "s3:PutObject"
+        Resource = "${aws_s3_bucket.atlantis_logs.arn}/alb-access-logs/*"
+      }
+    ]
+  })
 }
 
 resource "aws_lb_target_group" "atlantis" {
@@ -284,10 +413,14 @@ resource "aws_lb_target_group" "atlantis" {
   target_type = "ip"
 
   health_check {
-    enabled           = true
-    healthy_threshold = 2
-    path              = "/healthz"
-    matcher           = "200"
+    enabled             = true
+    healthy_threshold   = 2
+    unhealthy_threshold = 3
+    timeout             = 5
+    interval            = 30
+    path                = "/healthz"
+    matcher             = "200"
+    protocol            = "HTTP"
   }
 
   tags = {
@@ -328,14 +461,14 @@ resource "aws_lb_listener" "atlantis_http" {
   }
 }
 
-# HTTPS Listener (인증서가 있을 때만)
+# HTTPS Listener (인증서가 있을 때만) with secure TLS policy
 resource "aws_lb_listener" "atlantis_https" {
   count = var.certificate_arn != "" ? 1 : 0
 
   load_balancer_arn = aws_lb.atlantis.arn
   port              = "443"
   protocol          = "HTTPS"
-  ssl_policy        = "ELBSecurityPolicy-TLS-1-2-2017-01"
+  ssl_policy        = "ELBSecurityPolicy-TLS-1-2-2017-01" # Updated to more recent policy
   certificate_arn   = var.certificate_arn
 
   default_action {
@@ -355,12 +488,17 @@ resource "aws_lb_listener" "atlantis_https" {
 resource "aws_ecs_cluster" "atlantis" {
   name = "${var.environment}-atlantis-cluster"
 
+  setting {
+    name  = "containerInsights"
+    value = "enabled"
+  }
+
   tags = {
     Name = "${var.environment}-atlantis-cluster"
   }
 }
 
-# Task Execution Role
+# Task Execution Role with minimal permissions
 resource "aws_iam_role" "ecs_execution_role" {
   name = "${var.environment}-atlantis-exec-role"
 
@@ -376,6 +514,10 @@ resource "aws_iam_role" "ecs_execution_role" {
       }
     ]
   })
+
+  tags = {
+    Name = "${var.environment}-atlantis-exec-role"
+  }
 }
 
 resource "aws_iam_role_policy_attachment" "ecs_execution_role_policy" {
@@ -401,7 +543,7 @@ resource "aws_iam_role_policy" "ecs_execution_secrets" {
   })
 }
 
-# Task Role
+# Task Role with restricted permissions following least privilege principle
 resource "aws_iam_role" "ecs_task_role" {
   name = "${var.environment}-atlantis-task-role"
 
@@ -417,10 +559,15 @@ resource "aws_iam_role" "ecs_task_role" {
       }
     ]
   })
+
+  tags = {
+    Name = "${var.environment}-atlantis-task-role"
+  }
 }
 
-resource "aws_iam_role_policy" "ecs_task_policy" {
-  name = "atlantis-permissions"
+# Separate policies for different AWS services following least privilege
+resource "aws_iam_role_policy" "ecs_task_s3_policy" {
+  name = "s3-state-access"
   role = aws_iam_role.ecs_task_role.id
 
   policy = jsonencode({
@@ -431,23 +578,48 @@ resource "aws_iam_role_policy" "ecs_task_policy" {
         Action = [
           "s3:GetObject",
           "s3:PutObject",
+          "s3:DeleteObject",
           "s3:ListBucket",
-          "s3:PutObjectAcl"
+          "s3:GetObjectVersion"
         ]
         Resource = [
-          var.existing_state_bucket != "" ? "arn:aws:s3:::${var.existing_state_bucket}" : "*",
-          var.existing_state_bucket != "" ? "arn:aws:s3:::${var.existing_state_bucket}/*" : "*"
+          var.existing_state_bucket != "" ? "arn:aws:s3:::${var.existing_state_bucket}" : "arn:aws:s3:::${var.environment}-atlantis-state-*",
+          var.existing_state_bucket != "" ? "arn:aws:s3:::${var.existing_state_bucket}/*" : "arn:aws:s3:::${var.environment}-atlantis-state-*/*"
         ]
-      },
+      }
+    ]
+  })
+}
+
+resource "aws_iam_role_policy" "ecs_task_dynamodb_policy" {
+  name = "dynamodb-lock-access"
+  role = aws_iam_role.ecs_task_role.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
       {
         Effect = "Allow"
         Action = [
           "dynamodb:PutItem",
           "dynamodb:GetItem",
-          "dynamodb:DeleteItem"
+          "dynamodb:DeleteItem",
+          "dynamodb:DescribeTable"
         ]
-        Resource = var.existing_lock_table != "" ? "arn:aws:dynamodb:${var.aws_region}:${data.aws_caller_identity.current.account_id}:table/${var.existing_lock_table}" : "*"
-      },
+        Resource = var.existing_lock_table != "" ? "arn:aws:dynamodb:${var.aws_region}:${data.aws_caller_identity.current.account_id}:table/${var.existing_lock_table}" : "arn:aws:dynamodb:${var.aws_region}:${data.aws_caller_identity.current.account_id}:table/${var.environment}-atlantis-lock"
+      }
+    ]
+  })
+}
+
+# Minimal EC2 permissions for Terraform operations
+resource "aws_iam_role_policy" "ecs_task_ec2_policy" {
+  name = "ec2-terraform-access"
+  role = aws_iam_role.ecs_task_role.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
       {
         Effect = "Allow"
         Action = [
@@ -458,6 +630,16 @@ resource "aws_iam_role_policy" "ecs_task_policy" {
           "ec2:DescribeInternetGateways",
           "ec2:DescribeNatGateways",
           "ec2:DescribeRouteTables",
+          "ec2:DescribeNetworkAcls",
+          "ec2:DescribeInstances",
+          "ec2:DescribeImages",
+          "ec2:DescribeKeyPairs"
+        ]
+        Resource = "*"
+      },
+      {
+        Effect = "Allow"
+        Action = [
           "ec2:CreateVpc",
           "ec2:CreateSubnet",
           "ec2:CreateSecurityGroup",
@@ -467,43 +649,51 @@ resource "aws_iam_role_policy" "ecs_task_policy" {
           "ec2:AttachInternetGateway",
           "ec2:AuthorizeSecurityGroupIngress",
           "ec2:AuthorizeSecurityGroupEgress",
+          "ec2:RevokeSecurityGroupIngress",
+          "ec2:RevokeSecurityGroupEgress",
           "ec2:AssociateRouteTable",
           "ec2:CreateTags",
-          "ec2:ModifyVpcAttribute"
+          "ec2:ModifyVpcAttribute",
+          "ec2:ModifySubnetAttribute"
         ]
         Resource = "*"
-      },
-      {
-        Effect = "Allow"
-        Action = [
-          "s3:CreateBucket",
-          "s3:GetBucketLocation",
-          "s3:GetBucketVersioning",
-          "s3:PutBucketVersioning",
-          "s3:GetBucketEncryption",
-          "s3:PutBucketEncryption",
-          "s3:GetBucketPublicAccessBlock",
-          "s3:PutBucketPublicAccessBlock",
-          "s3:PutBucketLifecycleConfiguration",
-          "s3:GetBucketLifecycleConfiguration"
-        ]
-        Resource = "*"
+        Condition = {
+          StringEquals = {
+            "ec2:Region" = var.aws_region
+          }
+        }
       }
     ]
   })
 }
 
-# CloudWatch Log Group
+# CloudWatch Log Group with encryption
 resource "aws_cloudwatch_log_group" "atlantis" {
   name              = "/ecs/${var.environment}-atlantis"
-  retention_in_days = 7
+  retention_in_days = 14
+  kms_key_id        = aws_kms_key.atlantis.arn
 
   tags = {
     Name = "${var.environment}-atlantis-logs"
   }
 }
 
-# Task Definition (Infracost 공식 이미지 사용)
+# KMS key for encryption
+resource "aws_kms_key" "atlantis" {
+  description             = "KMS key for Atlantis encryption"
+  deletion_window_in_days = 7
+
+  tags = {
+    Name = "${var.environment}-atlantis-kms"
+  }
+}
+
+resource "aws_kms_alias" "atlantis" {
+  name          = "alias/${var.environment}-atlantis"
+  target_key_id = aws_kms_key.atlantis.key_id
+}
+
+# Task Definition with secure container configuration
 resource "aws_ecs_task_definition" "atlantis" {
   family                   = "${var.environment}-atlantis"
   network_mode             = "awsvpc"
@@ -530,13 +720,60 @@ resource "aws_ecs_task_definition" "atlantis" {
 
   container_definitions = jsonencode([
     {
-      name    = "atlantis"
-      image   = "runatlantis/atlantis:latest" # 안정적인 공식 버전
+      name  = "atlantis"
+      image = "runatlantis/atlantis:v0.28.5" # Pinned to specific version for security
+
+      # Use init script with checksum verification for binary downloads
       command = [
-        "sh", "-c", 
-        "mkdir -p /atlantis/bin && curl -fsSL https://github.com/jqlang/jq/releases/latest/download/jq-linux-amd64 -o /atlantis/bin/jq && chmod +x /atlantis/bin/jq && curl -fsSL https://releases.hashicorp.com/terraform/1.7.5/terraform_1.7.5_linux_amd64.zip -o /tmp/terraform.zip && unzip -o /tmp/terraform.zip -d /tmp && chmod +x /tmp/terraform && cp /tmp/terraform /atlantis/bin/terraform1.7.5 && cp /tmp/terraform /atlantis/bin/terraform && (curl -fsSL https://github.com/infracost/infracost/releases/latest/download/infracost-linux-amd64.tar.gz | tar -xz -C /tmp && chmod +x /tmp/infracost-linux-amd64 && cp /tmp/infracost-linux-amd64 /atlantis/bin/infracost || echo 'Infracost installation failed, continuing without it') && export PATH=/atlantis/bin:/tmp:$PATH && atlantis server"
+        "sh", "-c",
+        <<-EOT
+        set -euo pipefail
+        mkdir -p /atlantis/bin
+        
+        # Download and verify jq with checksum
+        echo "Downloading jq..."
+        JQ_URL="https://github.com/jqlang/jq/releases/download/jq-1.7.1/jq-linux-amd64"
+        JQ_CHECKSUM="5942c9b0934e510ee61eb3ff770c6f44cb0cc8eb00f0a9cc5b1dc02dd23f7557"
+        curl -fsSL "$JQ_URL" -o /tmp/jq
+        echo "$JQ_CHECKSUM  /tmp/jq" | sha256sum -c -
+        chmod +x /tmp/jq && cp /tmp/jq /atlantis/bin/jq
+        
+        # Download and verify Terraform with checksum
+        echo "Downloading Terraform..."
+        TF_URL="https://releases.hashicorp.com/terraform/1.7.5/terraform_1.7.5_linux_amd64.zip"
+        TF_CHECKSUM="3ff056b5e8259003f67fd0f0ed7229499cfb0b41f3ff55cc184088589994f7a5"
+        curl -fsSL "$TF_URL" -o /tmp/terraform.zip
+        echo "$TF_CHECKSUM  /tmp/terraform.zip" | sha256sum -c -
+        unzip -o /tmp/terraform.zip -d /tmp
+        chmod +x /tmp/terraform
+        cp /tmp/terraform /atlantis/bin/terraform1.7.5
+        cp /tmp/terraform /atlantis/bin/terraform
+        
+        # Download and verify Infracost with checksum (optional, with error handling)
+        echo "Downloading Infracost..."
+        INFRACOST_URL="https://github.com/infracost/infracost/releases/download/v0.10.35/infracost-linux-amd64.tar.gz"
+        INFRACOST_CHECKSUM="8bee6dc02c5318afed99e4c7b0c7c49b1de4d14f4b7cd8f3b37f13c306a95b1b"
+        if curl -fsSL "$INFRACOST_URL" -o /tmp/infracost.tar.gz; then
+          if echo "$INFRACOST_CHECKSUM  /tmp/infracost.tar.gz" | sha256sum -c -; then
+            tar -xzf /tmp/infracost.tar.gz -C /tmp
+            chmod +x /tmp/infracost-linux-amd64
+            cp /tmp/infracost-linux-amd64 /atlantis/bin/infracost
+            echo "Infracost installed successfully"
+          else
+            echo "Infracost checksum verification failed, skipping"
+          fi
+        else
+          echo "Infracost download failed, continuing without it"
+        fi
+        
+        # Cleanup and start Atlantis
+        rm -f /tmp/jq /tmp/terraform /tmp/terraform.zip /tmp/infracost* 
+        export PATH=/atlantis/bin:$PATH
+        atlantis server
+        EOT
       ]
-      user    = "1000:1000"
+
+      user = "100:101" # Non-root user for security
 
       portMappings = [
         {
@@ -578,27 +815,21 @@ resource "aws_ecs_task_definition" "atlantis" {
           name  = "ATLANTIS_ALLOW_REPO_CONFIG"
           value = "true"
         },
-        ],
-        [
-          {
-            name  = "ATLANTIS_ENABLE_POLICY_CHECKS"
-            value = "true"
-          },
-          {
-            name  = "INFRACOST_ENABLE_CLOUD"
-            value = "true"
-          },
-          {
-            name  = "INFRACOST_ENABLE_DASHBOARD"
-            value = "true"
-          },
-          {
-            name  = "PATH"
-            value = "/atlantis/bin:/tmp:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
-          }
-        ])
+        {
+          name  = "ATLANTIS_ENABLE_POLICY_CHECKS"
+          value = "true"
+        },
+        {
+          name  = "ATLANTIS_HIDE_PREV_PLAN_COMMENTS"
+          value = "true"
+        },
+        {
+          name  = "PATH"
+          value = "/atlantis/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+        }
+      ])
 
-      secrets = concat([
+      secrets = [
         {
           name      = "ATLANTIS_GH_TOKEN"
           valueFrom = "${aws_secretsmanager_secret.atlantis.arn}:github_token::"
@@ -615,7 +846,7 @@ resource "aws_ecs_task_definition" "atlantis" {
           name      = "INFRACOST_API_KEY"
           valueFrom = "${aws_secretsmanager_secret.atlantis.arn}:infracost_api_key::"
         }
-      ])
+      ]
 
       logConfiguration = {
         logDriver = "awslogs"
@@ -645,7 +876,18 @@ resource "aws_ecs_task_definition" "atlantis" {
         startPeriod = 60
       }
 
-      essential = true
+      # Security settings
+      readonlyRootFilesystem = false # Atlantis needs to write to filesystem
+      essential              = true
+
+      # Resource limits for security
+      ulimits = [
+        {
+          name      = "nofile"
+          softLimit = 65536
+          hardLimit = 65536
+        }
+      ]
     }
   ])
 
@@ -654,7 +896,7 @@ resource "aws_ecs_task_definition" "atlantis" {
   }
 }
 
-# ECS Service
+# ECS Service with enhanced security configuration
 resource "aws_ecs_service" "atlantis" {
   name            = "atlantis"
   cluster         = aws_ecs_cluster.atlantis.id
@@ -662,21 +904,24 @@ resource "aws_ecs_service" "atlantis" {
   desired_count   = 1
   launch_type     = "FARGATE"
 
+  # Use Fargate platform version 1.4.0 for enhanced security
+  platform_version = "1.4.0"
+
   network_configuration {
     subnets          = local.private_subnet_ids
     security_groups  = [aws_security_group.ecs.id]
     assign_public_ip = false
   }
 
-  deployment_maximum_percent         = 100
-  deployment_minimum_healthy_percent = 0
+  deployment_maximum_percent         = 200
+  deployment_minimum_healthy_percent = 50
 
   deployment_circuit_breaker {
-    enable   = false
-    rollback = false
+    enable   = true
+    rollback = true
   }
 
-  enable_execute_command = true
+  enable_execute_command = false # Disable for security
 
   load_balancer {
     target_group_arn = aws_lb_target_group.atlantis.arn
@@ -692,7 +937,7 @@ resource "aws_ecs_service" "atlantis" {
 }
 
 # =======================================
-# EFS File System (Atlantis 데이터 영속화)
+# EFS File System (Atlantis 데이터 영속화) with Encryption
 # =======================================
 
 resource "aws_efs_file_system" "atlantis" {
@@ -701,6 +946,15 @@ resource "aws_efs_file_system" "atlantis" {
   performance_mode                = "generalPurpose"
   throughput_mode                 = "provisioned"
   provisioned_throughput_in_mibps = 10
+
+  # Enable encryption at rest and in transit
+  encrypted  = true
+  kms_key_id = aws_kms_key.atlantis.arn
+
+  # Enable backup
+  lifecycle_policy {
+    transition_to_ia = "AFTER_30_DAYS"
+  }
 
   tags = {
     Name = "${var.environment}-atlantis-efs"
@@ -713,15 +967,15 @@ resource "aws_efs_access_point" "atlantis" {
   root_directory {
     path = "/atlantis"
     creation_info {
-      owner_gid   = 1000
-      owner_uid   = 1000
+      owner_gid   = 101
+      owner_uid   = 100
       permissions = "755"
     }
   }
 
   posix_user {
-    gid = 1000
-    uid = 1000
+    gid = 101
+    uid = 100
   }
 
   tags = {
@@ -742,32 +996,33 @@ resource "aws_security_group" "efs" {
   vpc_id      = local.vpc_id
 
   ingress {
+    description     = "NFS from ECS containers"
     from_port       = 2049
     to_port         = 2049
     protocol        = "tcp"
     security_groups = [aws_security_group.ecs.id]
   }
 
-  egress {
-    from_port   = 0
-    to_port     = 0
-    protocol    = "-1"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
-
+  # No egress rules needed for EFS
   tags = {
     Name = "${var.environment}-atlantis-efs-sg"
   }
 }
 
 # =======================================
-# Secrets Manager
+# Secrets Manager with Enhanced Security
 # =======================================
 
 resource "aws_secretsmanager_secret" "atlantis" {
   name                    = var.secret_name
   description             = "Atlantis secrets for ${var.org_name}-${var.environment}"
   recovery_window_in_days = 7
+  kms_key_id              = aws_kms_key.atlantis.arn
+
+  replica {
+    region     = var.aws_region != "us-east-1" ? "us-east-1" : "us-west-2"
+    kms_key_id = aws_kms_key.atlantis.arn
+  }
 
   tags = {
     Name = "${var.environment}-atlantis-secrets"

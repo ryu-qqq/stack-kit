@@ -1,0 +1,628 @@
+name: "Infrastructure Testing & Compliance"
+
+on:
+  schedule:
+    # Run daily at 2 AM UTC
+    - cron: '0 2 * * *'
+  workflow_dispatch:
+    inputs:
+      test_type:
+        description: "Type of test to run"
+        required: true
+        type: choice
+        options:
+          - full-suite
+          - security-only
+          - performance-only
+          - compliance-only
+      environment:
+        description: "Environment to test"
+        required: true
+        type: choice
+        options:
+          - dev
+          - staging
+          - prod
+          - all
+
+permissions:
+  id-token: write
+  contents: read
+  security-events: write
+  issues: write
+
+env:
+  TF_VERSION: "1.7.5"
+  REGION: ${{ vars.TF_STACK_REGION || 'ap-northeast-2' }}
+
+jobs:
+  security-compliance:
+    name: "🔒 Security & Compliance Testing"
+    runs-on: ubuntu-latest
+    if: inputs.test_type == 'full-suite' || inputs.test_type == 'security-only' || github.event_name == 'schedule'
+    strategy:
+      matrix:
+        environment: ${{ inputs.environment == 'all' && fromJson('["dev", "staging", "prod"]') || fromJson(format('["{}"]', inputs.environment || 'prod')) }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ matrix.environment == 'prod' && secrets.TF_PROD_ROLE_ARN || secrets.TF_DEV_ROLE_ARN }}
+          aws-region: ${{ env.REGION }}
+          role-session-name: security-test-${{ matrix.environment }}-${{ github.run_id }}
+
+      - name: Infrastructure security scan
+        run: |
+          echo "🔍 Running infrastructure security scan for ${{ matrix.environment }}..."
+          
+          # Check security groups for overly permissive rules
+          echo "Checking security groups..."
+          INSECURE_SGS=$(aws ec2 describe-security-groups \
+            --filters "Name=group-name,Values=*atlantis*${{ matrix.environment }}*" \
+            --query 'SecurityGroups[?IpPermissions[?IpProtocol==`-1` && IpRanges[?CidrIp==`0.0.0.0/0`]]].[GroupId,GroupName]' \
+            --output table)
+          
+          if [[ -n "$INSECURE_SGS" && "$INSECURE_SGS" != "[]" ]]; then
+            echo "⚠️ Found potentially insecure security groups:"
+            echo "$INSECURE_SGS"
+          else
+            echo "✅ No overly permissive security groups found"
+          fi
+
+      - name: Secrets management audit
+        run: |
+          echo "🔐 Auditing secrets management..."
+          
+          # Check Secrets Manager secrets
+          ATLANTIS_SECRETS=$(aws secretsmanager list-secrets \
+            --filters Key=name,Values=atlantis \
+            --query 'SecretList[?contains(Name, `${{ matrix.environment }}`)].Name' \
+            --output text)
+          
+          for secret in $ATLANTIS_SECRETS; do
+            echo "Checking secret: $secret"
+            
+            # Check if secret has proper rotation
+            ROTATION_ENABLED=$(aws secretsmanager describe-secret \
+              --secret-id "$secret" \
+              --query 'RotationEnabled' \
+              --output text 2>/dev/null || echo "false")
+            
+            if [[ "$ROTATION_ENABLED" == "true" ]]; then
+              echo "✅ Secret $secret has rotation enabled"
+            else
+              echo "⚠️ Secret $secret does not have rotation enabled"
+            fi
+          done
+
+      - name: Network security assessment
+        run: |
+          echo "🌐 Assessing network security..."
+          
+          # Check VPC flow logs
+          VPC_ID=$(aws ec2 describe-vpcs \
+            --filters "Name=tag:Name,Values=*atlantis*${{ matrix.environment }}*" \
+            --query 'Vpcs[0].VpcId' \
+            --output text 2>/dev/null || echo "")
+          
+          if [[ -n "$VPC_ID" && "$VPC_ID" != "None" ]]; then
+            FLOW_LOGS=$(aws ec2 describe-flow-logs \
+              --filter "Name=resource-id,Values=$VPC_ID" \
+              --query 'FlowLogs[?FlowLogStatus==`ACTIVE`]' \
+              --output text)
+            
+            if [[ -n "$FLOW_LOGS" ]]; then
+              echo "✅ VPC flow logs are enabled for $VPC_ID"
+            else
+              echo "⚠️ VPC flow logs are not enabled for $VPC_ID"
+            fi
+          fi
+
+      - name: ECS security configuration check
+        run: |
+          echo "🐳 Checking ECS security configuration..."
+          
+          CLUSTER_NAME="${{ matrix.environment }}-atlantis"
+          
+          # Check if cluster exists
+          if aws ecs describe-clusters --clusters "$CLUSTER_NAME" --query 'clusters[0].status' --output text | grep -q "ACTIVE"; then
+            echo "✅ ECS cluster $CLUSTER_NAME is active"
+            
+            # Check service security configuration
+            SERVICE_CONFIG=$(aws ecs describe-services \
+              --cluster "$CLUSTER_NAME" \
+              --services "$CLUSTER_NAME" \
+              --query 'services[0].{networkConfiguration:networkConfiguration,enableExecuteCommand:enableExecuteCommand}' \
+              --output json 2>/dev/null)
+            
+            if [[ -n "$SERVICE_CONFIG" ]]; then
+              echo "Service configuration:"
+              echo "$SERVICE_CONFIG" | jq .
+              
+              # Check if service is in private subnets
+              SUBNETS=$(echo "$SERVICE_CONFIG" | jq -r '.networkConfiguration.awsvpcConfiguration.subnets[]' 2>/dev/null || echo "")
+              for subnet in $SUBNETS; do
+                ROUTE_TABLE=$(aws ec2 describe-route-tables \
+                  --filters "Name=association.subnet-id,Values=$subnet" \
+                  --query 'RouteTables[0].Routes[?DestinationCidrBlock==`0.0.0.0/0`].GatewayId' \
+                  --output text 2>/dev/null || echo "")
+                
+                if [[ "$ROUTE_TABLE" == igw-* ]]; then
+                  echo "⚠️ Service may be in public subnet: $subnet"
+                else
+                  echo "✅ Service appears to be in private subnet: $subnet"
+                fi
+              done
+            fi
+          else
+            echo "⚠️ ECS cluster $CLUSTER_NAME not found or not active"
+          fi
+
+      - name: Generate security report
+        run: |
+          echo "📊 Generating security compliance report..."
+          
+          REPORT_FILE="security-report-${{ matrix.environment }}-$(date +%Y%m%d).md"
+          
+          cat > "$REPORT_FILE" << EOF
+          # Security Compliance Report - ${{ matrix.environment }}
+          
+          **Date**: $(date)
+          **Environment**: ${{ matrix.environment }}
+          **Region**: ${{ env.REGION }}
+          
+          ## Summary
+          
+          This report contains security findings for the Atlantis infrastructure in the ${{ matrix.environment }} environment.
+          
+          ## Findings
+          
+          ### Security Groups
+          - Checked for overly permissive rules
+          - Status: See logs above
+          
+          ### Secrets Management
+          - Audited AWS Secrets Manager configuration
+          - Checked rotation policies
+          - Status: See logs above
+          
+          ### Network Security
+          - Verified VPC flow logs configuration
+          - Checked subnet routing
+          - Status: See logs above
+          
+          ### ECS Security
+          - Verified service network configuration
+          - Checked task execution roles
+          - Status: See logs above
+          
+          ## Recommendations
+          
+          1. Enable VPC flow logs if not already enabled
+          2. Implement secret rotation for long-lived secrets
+          3. Ensure services run in private subnets
+          4. Regular security group audits
+          
+          ---
+          Generated by GitHub Actions on $(date)
+          EOF
+          
+          echo "📄 Security report generated: $REPORT_FILE"
+
+  performance-testing:
+    name: "⚡ Performance Testing"
+    runs-on: ubuntu-latest
+    if: inputs.test_type == 'full-suite' || inputs.test_type == 'performance-only' || github.event_name == 'schedule'
+    strategy:
+      matrix:
+        environment: ${{ inputs.environment == 'all' && fromJson('["staging", "prod"]') || fromJson(format('["{}"]', inputs.environment == 'dev' && 'staging' || inputs.environment || 'prod')) }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ matrix.environment == 'prod' && secrets.TF_PROD_ROLE_ARN || secrets.TF_DEV_ROLE_ARN }}
+          aws-region: ${{ env.REGION }}
+          role-session-name: perf-test-${{ matrix.environment }}-${{ github.run_id }}
+
+      - name: Install performance testing tools
+        run: |
+          # Install Apache Bench for load testing
+          sudo apt-get update
+          sudo apt-get install -y apache2-utils curl jq
+          
+          # Install hey for HTTP load testing
+          wget https://hey-release.s3.us-east-2.amazonaws.com/hey_linux_amd64
+          chmod +x hey_linux_amd64
+          sudo mv hey_linux_amd64 /usr/local/bin/hey
+
+      - name: Discover Atlantis URL
+        run: |
+          echo "🔍 Discovering Atlantis URL for ${{ matrix.environment }}..."
+          
+          # Try multiple methods to find the Atlantis URL
+          ATLANTIS_URL=""
+          
+          # Method 1: Parameter Store
+          ATLANTIS_URL=$(aws ssm get-parameter \
+            --name "/atlantis/${{ matrix.environment }}/url" \
+            --query "Parameter.Value" \
+            --output text 2>/dev/null || echo "")
+          
+          # Method 2: Load Balancer DNS
+          if [[ -z "$ATLANTIS_URL" ]]; then
+            ALB_DNS=$(aws elbv2 describe-load-balancers \
+              --names "${{ matrix.environment }}-atlantis-alb" \
+              --query 'LoadBalancers[0].DNSName' \
+              --output text 2>/dev/null || echo "")
+            
+            if [[ -n "$ALB_DNS" && "$ALB_DNS" != "None" ]]; then
+              ATLANTIS_URL="https://$ALB_DNS"
+            fi
+          fi
+          
+          # Method 3: Default domain
+          if [[ -z "$ATLANTIS_URL" ]]; then
+            if [[ "${{ matrix.environment }}" == "prod" ]]; then
+              ATLANTIS_URL="https://atlantis.${{ vars.DOMAIN || 'example.com' }}"
+            else
+              ATLANTIS_URL="https://${{ matrix.environment }}-atlantis.${{ vars.DOMAIN || 'example.com' }}"
+            fi
+          fi
+          
+          echo "🌐 Testing Atlantis at: $ATLANTIS_URL"
+          echo "ATLANTIS_URL=$ATLANTIS_URL" >> $GITHUB_ENV
+
+      - name: Health check and response time test
+        run: |
+          echo "🏥 Testing health endpoint response time..."
+          
+          # Test health endpoint multiple times
+          RESPONSE_TIMES=()
+          for i in {1..10}; do
+            RESPONSE_TIME=$(curl -o /dev/null -s -w "%{time_total}" "$ATLANTIS_URL/healthz" 2>/dev/null || echo "999")
+            RESPONSE_TIMES+=("$RESPONSE_TIME")
+            echo "Health check $i: ${RESPONSE_TIME}s"
+            sleep 1
+          done
+          
+          # Calculate average response time
+          TOTAL=0
+          for time in "${RESPONSE_TIMES[@]}"; do
+            TOTAL=$(echo "$TOTAL + $time" | bc -l)
+          done
+          AVERAGE=$(echo "scale=3; $TOTAL / ${#RESPONSE_TIMES[@]}" | bc -l)
+          
+          echo "📊 Average health check response time: ${AVERAGE}s"
+          
+          # Set threshold (2 seconds)
+          if (( $(echo "$AVERAGE > 2.0" | bc -l) )); then
+            echo "⚠️ Average response time exceeds 2 second threshold"
+          else
+            echo "✅ Response time within acceptable limits"
+          fi
+
+      - name: Load testing
+        run: |
+          echo "🔥 Running load test against Atlantis..."
+          
+          # Light load test (100 requests, 10 concurrent)
+          echo "Running light load test..."
+          hey -n 100 -c 10 -q 5 "$ATLANTIS_URL/healthz" > load-test-light.txt 2>&1
+          
+          echo "Light load test results:"
+          cat load-test-light.txt
+          
+          # Extract key metrics
+          REQUESTS_PER_SEC=$(grep "Requests/sec:" load-test-light.txt | awk '{print $2}' || echo "0")
+          AVERAGE_RESPONSE=$(grep "Average:" load-test-light.txt | awk '{print $2}' || echo "0")
+          
+          echo "📈 Performance metrics:"
+          echo "  - Requests per second: $REQUESTS_PER_SEC"
+          echo "  - Average response time: $AVERAGE_RESPONSE"
+
+      - name: Resource utilization check
+        run: |
+          echo "📊 Checking resource utilization..."
+          
+          CLUSTER_NAME="${{ matrix.environment }}-atlantis"
+          SERVICE_NAME="${{ matrix.environment }}-atlantis"
+          
+          # Get ECS service metrics
+          if aws ecs describe-services --cluster "$CLUSTER_NAME" --services "$SERVICE_NAME" >/dev/null 2>&1; then
+            echo "Getting ECS service metrics..."
+            
+            # Get current CPU and memory utilization
+            END_TIME=$(date -u +%Y-%m-%dT%H:%M:%S)
+            START_TIME=$(date -u -d '1 hour ago' +%Y-%m-%dT%H:%M:%S)
+            
+            CPU_UTILIZATION=$(aws cloudwatch get-metric-statistics \
+              --namespace AWS/ECS \
+              --metric-name CPUUtilization \
+              --dimensions Name=ServiceName,Value="$SERVICE_NAME" Name=ClusterName,Value="$CLUSTER_NAME" \
+              --start-time "$START_TIME" \
+              --end-time "$END_TIME" \
+              --period 300 \
+              --statistics Average \
+              --query 'Datapoints[0].Average' \
+              --output text 2>/dev/null || echo "0")
+            
+            MEMORY_UTILIZATION=$(aws cloudwatch get-metric-statistics \
+              --namespace AWS/ECS \
+              --metric-name MemoryUtilization \
+              --dimensions Name=ServiceName,Value="$SERVICE_NAME" Name=ClusterName,Value="$CLUSTER_NAME" \
+              --start-time "$START_TIME" \
+              --end-time "$END_TIME" \
+              --period 300 \
+              --statistics Average \
+              --query 'Datapoints[0].Average' \
+              --output text 2>/dev/null || echo "0")
+            
+            echo "💻 Resource utilization:"
+            echo "  - CPU: ${CPU_UTILIZATION}%"
+            echo "  - Memory: ${MEMORY_UTILIZATION}%"
+            
+            # Check if utilization is within acceptable ranges
+            if (( $(echo "$CPU_UTILIZATION > 80" | bc -l) )); then
+              echo "⚠️ High CPU utilization detected"
+            fi
+            
+            if (( $(echo "$MEMORY_UTILIZATION > 80" | bc -l) )); then
+              echo "⚠️ High memory utilization detected"
+            fi
+          else
+            echo "⚠️ ECS service not found: $SERVICE_NAME in cluster $CLUSTER_NAME"
+          fi
+
+  compliance-audit:
+    name: "📋 Compliance Audit"
+    runs-on: ubuntu-latest
+    if: inputs.test_type == 'full-suite' || inputs.test_type == 'compliance-only' || github.event_name == 'schedule'
+    strategy:
+      matrix:
+        environment: ${{ inputs.environment == 'all' && fromJson('["dev", "staging", "prod"]') || fromJson(format('["{}"]', inputs.environment || 'prod')) }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ matrix.environment == 'prod' && secrets.TF_PROD_ROLE_ARN || secrets.TF_DEV_ROLE_ARN }}
+          aws-region: ${{ env.REGION }}
+          role-session-name: compliance-audit-${{ matrix.environment }}-${{ github.run_id }}
+
+      - name: Infrastructure compliance check
+        run: |
+          echo "📋 Running infrastructure compliance audit for ${{ matrix.environment }}..."
+          
+          # Initialize compliance score
+          COMPLIANCE_SCORE=100
+          TOTAL_CHECKS=0
+          PASSED_CHECKS=0
+          
+          echo "## Compliance Audit Report - ${{ matrix.environment }}" > compliance-report.md
+          echo "Date: $(date)" >> compliance-report.md
+          echo "" >> compliance-report.md
+          
+          # Check 1: Encryption at rest
+          echo "🔐 Checking encryption at rest..."
+          TOTAL_CHECKS=$((TOTAL_CHECKS + 1))
+          
+          # Check EBS encryption
+          UNENCRYPTED_VOLUMES=$(aws ec2 describe-volumes \
+            --filters "Name=tag:Environment,Values=${{ matrix.environment }}" "Name=encrypted,Values=false" \
+            --query 'Volumes[].VolumeId' \
+            --output text | wc -w)
+          
+          if [[ $UNENCRYPTED_VOLUMES -eq 0 ]]; then
+            echo "✅ All EBS volumes are encrypted"
+            echo "- ✅ EBS encryption: PASS" >> compliance-report.md
+            PASSED_CHECKS=$((PASSED_CHECKS + 1))
+          else
+            echo "❌ Found $UNENCRYPTED_VOLUMES unencrypted EBS volumes"
+            echo "- ❌ EBS encryption: FAIL ($UNENCRYPTED_VOLUMES unencrypted volumes)" >> compliance-report.md
+            COMPLIANCE_SCORE=$((COMPLIANCE_SCORE - 10))
+          fi
+          
+          # Check 2: CloudTrail logging
+          echo "📝 Checking CloudTrail logging..."
+          TOTAL_CHECKS=$((TOTAL_CHECKS + 1))
+          
+          ACTIVE_TRAILS=$(aws cloudtrail describe-trails \
+            --query 'trailList[?IsLogging==`true`]' \
+            --output text | wc -l)
+          
+          if [[ $ACTIVE_TRAILS -gt 0 ]]; then
+            echo "✅ CloudTrail logging is enabled"
+            echo "- ✅ CloudTrail logging: PASS" >> compliance-report.md
+            PASSED_CHECKS=$((PASSED_CHECKS + 1))
+          else
+            echo "❌ No active CloudTrail found"
+            echo "- ❌ CloudTrail logging: FAIL" >> compliance-report.md
+            COMPLIANCE_SCORE=$((COMPLIANCE_SCORE - 15))
+          fi
+          
+          # Check 3: IAM password policy
+          echo "🔑 Checking IAM password policy..."
+          TOTAL_CHECKS=$((TOTAL_CHECKS + 1))
+          
+          PASSWORD_POLICY=$(aws iam get-account-password-policy 2>/dev/null || echo "")
+          if [[ -n "$PASSWORD_POLICY" ]]; then
+            MIN_LENGTH=$(echo "$PASSWORD_POLICY" | jq -r '.PasswordPolicy.MinimumPasswordLength' 2>/dev/null || echo "0")
+            if [[ $MIN_LENGTH -ge 8 ]]; then
+              echo "✅ IAM password policy meets requirements"
+              echo "- ✅ IAM password policy: PASS (min length: $MIN_LENGTH)" >> compliance-report.md
+              PASSED_CHECKS=$((PASSED_CHECKS + 1))
+            else
+              echo "❌ IAM password policy minimum length too short: $MIN_LENGTH"
+              echo "- ❌ IAM password policy: FAIL (min length: $MIN_LENGTH < 8)" >> compliance-report.md
+              COMPLIANCE_SCORE=$((COMPLIANCE_SCORE - 5))
+            fi
+          else
+            echo "❌ No IAM password policy found"
+            echo "- ❌ IAM password policy: FAIL (not configured)" >> compliance-report.md
+            COMPLIANCE_SCORE=$((COMPLIANCE_SCORE - 10))
+          fi
+          
+          # Check 4: S3 bucket public access
+          echo "🪣 Checking S3 bucket public access..."
+          TOTAL_CHECKS=$((TOTAL_CHECKS + 1))
+          
+          PUBLIC_BUCKETS=$(aws s3api list-buckets --query 'Buckets[].Name' --output text | \
+            xargs -I {} aws s3api get-bucket-acl --bucket {} --query 'Grants[?Grantee.URI==`http://acs.amazonaws.com/groups/global/AllUsers`]' --output text 2>/dev/null | \
+            wc -l)
+          
+          if [[ $PUBLIC_BUCKETS -eq 0 ]]; then
+            echo "✅ No publicly accessible S3 buckets found"
+            echo "- ✅ S3 public access: PASS" >> compliance-report.md
+            PASSED_CHECKS=$((PASSED_CHECKS + 1))
+          else
+            echo "❌ Found $PUBLIC_BUCKETS potentially public S3 buckets"
+            echo "- ❌ S3 public access: FAIL ($PUBLIC_BUCKETS public buckets)" >> compliance-report.md
+            COMPLIANCE_SCORE=$((COMPLIANCE_SCORE - 20))
+          fi
+          
+          # Calculate final compliance score
+          echo "" >> compliance-report.md
+          echo "## Summary" >> compliance-report.md
+          echo "- Total checks: $TOTAL_CHECKS" >> compliance-report.md
+          echo "- Passed checks: $PASSED_CHECKS" >> compliance-report.md
+          echo "- Compliance score: $COMPLIANCE_SCORE/100" >> compliance-report.md
+          
+          echo "📊 Compliance audit completed:"
+          echo "  - Total checks: $TOTAL_CHECKS"
+          echo "  - Passed checks: $PASSED_CHECKS"
+          echo "  - Compliance score: $COMPLIANCE_SCORE/100"
+          
+          # Set output for other jobs
+          echo "COMPLIANCE_SCORE=$COMPLIANCE_SCORE" >> $GITHUB_ENV
+
+      - name: Upload compliance report
+        uses: actions/upload-artifact@v4
+        with:
+          name: compliance-report-${{ matrix.environment }}
+          path: compliance-report.md
+          retention-days: 30
+
+  report-generation:
+    name: "📊 Generate Test Report"
+    runs-on: ubuntu-latest
+    needs: [security-compliance, performance-testing, compliance-audit]
+    if: always()
+    steps:
+      - name: Generate comprehensive report
+        run: |
+          echo "📊 Generating comprehensive test report..."
+          
+          REPORT_FILE="infrastructure-test-report-$(date +%Y%m%d).md"
+          
+          cat > "$REPORT_FILE" << EOF
+          # Infrastructure Testing Report
+          
+          **Date**: $(date)
+          **Trigger**: ${{ github.event_name }}
+          **Test Type**: ${{ inputs.test_type || 'scheduled' }}
+          **Environment(s)**: ${{ inputs.environment || 'all' }}
+          
+          ## Test Results Summary
+          
+          | Test Category | Status |
+          |---------------|---------|
+          | Security & Compliance | ${{ needs.security-compliance.result == 'success' && '✅ PASSED' || '❌ FAILED' }} |
+          | Performance Testing | ${{ needs.performance-testing.result == 'success' && '✅ PASSED' || '❌ FAILED' }} |
+          | Compliance Audit | ${{ needs.compliance-audit.result == 'success' && '✅ PASSED' || '❌ FAILED' }} |
+          
+          ## Recommendations
+          
+          Based on the test results, consider the following actions:
+          
+          1. **Security**: Review security group configurations and ensure proper network isolation
+          2. **Performance**: Monitor response times and resource utilization during peak usage
+          3. **Compliance**: Address any failing compliance checks immediately
+          4. **Monitoring**: Ensure all necessary logging and monitoring is in place
+          
+          ## Next Steps
+          
+          - Review detailed logs for any failed tests
+          - Update infrastructure configurations as needed
+          - Schedule follow-up tests after remediation
+          
+          ---
+          Generated by GitHub Actions Infrastructure Testing Workflow
+          EOF
+          
+          echo "📄 Report generated: $REPORT_FILE"
+
+      - name: Create issue for failures
+        if: needs.security-compliance.result == 'failure' || needs.performance-testing.result == 'failure' || needs.compliance-audit.result == 'failure'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const title = `Infrastructure Test Failures - ${new Date().toISOString().split('T')[0]}`;
+            const body = `## Infrastructure Testing Failures Detected
+            
+            **Date**: ${new Date().toISOString()}
+            **Workflow Run**: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+            
+            ### Failed Tests:
+            ${('${{ needs.security-compliance.result }}' === 'failure') ? '- ❌ Security & Compliance\n' : ''}${('${{ needs.performance-testing.result }}' === 'failure') ? '- ❌ Performance Testing\n' : ''}${('${{ needs.compliance-audit.result }}' === 'failure') ? '- ❌ Compliance Audit\n' : ''}
+            
+            ### Action Required:
+            1. Review the workflow logs for detailed failure information
+            2. Address the underlying issues
+            3. Re-run the tests to verify fixes
+            
+            This issue was automatically created by the Infrastructure Testing workflow.`;
+            
+            const { data: issue } = await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: title,
+              body: body,
+              labels: ['infrastructure', 'testing', 'bug']
+            });
+            
+            console.log(`Created issue #${issue.number}: ${issue.html_url}`);
+
+      - name: Notify test completion
+        if: always()
+        run: |
+          if [[ -n "${{ secrets.SLACK_WEBHOOK_URL }}" ]]; then
+            OVERALL_STATUS="success"
+            if [[ "${{ needs.security-compliance.result }}" == "failure" || "${{ needs.performance-testing.result }}" == "failure" || "${{ needs.compliance-audit.result }}" == "failure" ]]; then
+              OVERALL_STATUS="failure"
+            fi
+            
+            if [[ "$OVERALL_STATUS" == "success" ]]; then
+              COLOR="good"
+              EMOJI="✅"
+              MESSAGE="Infrastructure testing completed successfully"
+            else
+              COLOR="danger"
+              EMOJI="❌"
+              MESSAGE="Infrastructure testing detected issues"
+            fi
+            
+            curl -X POST -H 'Content-type: application/json' \
+              --data "{
+                \"text\": \"$EMOJI $MESSAGE\",
+                \"attachments\": [{
+                  \"color\": \"$COLOR\",
+                  \"fields\": [
+                    {\"title\": \"Test Type\", \"value\": \"${{ inputs.test_type || 'scheduled' }}\", \"short\": true},
+                    {\"title\": \"Environment\", \"value\": \"${{ inputs.environment || 'all' }}\", \"short\": true},
+                    {\"title\": \"Security\", \"value\": \"${{ needs.security-compliance.result }}\", \"short\": true},
+                    {\"title\": \"Performance\", \"value\": \"${{ needs.performance-testing.result }}\", \"short\": true},
+                    {\"title\": \"Compliance\", \"value\": \"${{ needs.compliance-audit.result }}\", \"short\": true},
+                    {\"title\": \"Run URL\", \"value\": \"${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}\", \"short\": false}
+                  ]
+                }]
+              }" \
+              ${{ secrets.SLACK_WEBHOOK_URL }}
+          fi

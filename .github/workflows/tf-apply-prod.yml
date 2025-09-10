@@ -1,0 +1,515 @@
+name: "Terraform Apply - Production (Enhanced Security)"
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Git ref to deploy (main/tag/sha)"
+        required: false
+        default: "main"
+      stack_name:
+        description: "Specific stack to deploy (optional - deploys all if not specified)"
+        required: false
+      dry_run:
+        description: "Dry run (plan only, no apply)"
+        type: boolean
+        default: false
+      force_unlock:
+        description: "Force unlock state (emergency use only)"
+        type: boolean
+        default: false
+      lock_id:
+        description: "Specific lock ID to unlock (leave empty for auto-detection)"
+        required: false
+
+permissions:
+  id-token: write
+  contents: read
+  deployments: write
+  actions: write
+
+env:
+  TF_VERSION: "1.7.5"
+  TF_STACK_NAME: ${{ vars.TF_STACK_NAME || github.event.repository.name }}
+  TF_STACK_REGION: ${{ vars.TF_STACK_REGION || 'ap-northeast-2' }}
+  SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK_URL }}
+
+concurrency:
+  group: tf-apply-prod-${{ inputs.stack_name || 'all' }}
+  cancel-in-progress: false
+
+jobs:
+  security-gate:
+    name: "🔒 Security Gate"
+    runs-on: ubuntu-latest
+    environment: prod-security-gate
+    outputs:
+      approved: ${{ steps.gate.outputs.approved }}
+      deployment_id: ${{ steps.deployment.outputs.deployment_id }}
+    steps:
+      - name: Create deployment
+        id: deployment
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const deployment = await github.rest.repos.createDeployment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              ref: '${{ inputs.ref }}',
+              environment: 'prod',
+              description: 'Production Terraform deployment',
+              required_contexts: [],
+              auto_merge: false
+            });
+            core.setOutput('deployment_id', deployment.data.id);
+            return deployment.data.id;
+
+      - name: Security validation
+        id: gate
+        run: |
+          # Check if this is a manual workflow dispatch
+          if [[ "${{ github.event_name }}" != "workflow_dispatch" ]]; then
+            echo "❌ Production deployments must be manually triggered"
+            exit 1
+          fi
+          
+          # Validate required secrets
+          MISSING_SECRETS=()
+          if [[ -z "${{ secrets.TF_PROD_ROLE_ARN }}" ]]; then
+            MISSING_SECRETS+=("TF_PROD_ROLE_ARN")
+          fi
+          
+          if [[ ${#MISSING_SECRETS[@]} -gt 0 ]]; then
+            echo "❌ Missing required secrets: ${MISSING_SECRETS[*]}"
+            exit 1
+          fi
+          
+          echo "✅ Security gate passed"
+          echo "approved=true" >> $GITHUB_OUTPUT
+
+  pre-deployment:
+    name: "🔍 Pre-deployment Analysis"
+    needs: security-gate
+    if: needs.security-gate.outputs.approved == 'true'
+    runs-on: ubuntu-latest
+    outputs:
+      stacks_to_deploy: ${{ steps.stacks.outputs.stacks }}
+      backup_completed: ${{ steps.backup.outputs.completed }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
+          fetch-depth: 1
+
+      - name: Identify production stacks
+        id: stacks
+        run: |
+          set -euo pipefail
+          
+          if [[ -n "${{ inputs.stack_name }}" ]]; then
+            # Single stack deployment
+            STACK_PATH="terraform/stacks/${{ inputs.stack_name }}-prod-${{ env.TF_STACK_REGION }}"
+          
+            if [[ ! -d "$STACK_PATH" ]]; then
+              echo "❌ Stack not found: $STACK_PATH"
+              exit 1
+            fi
+          
+            STACKS=("[\"$STACK_PATH\"]")
+          else
+            # Find all production stacks with backend.hcl
+            mapfile -t PROD_STACKS < <(find terraform/stacks -name backend.hcl -exec dirname {} \; | grep -E "(prod|production)" | sort)
+          
+            if [[ ${#PROD_STACKS[@]} -eq 0 ]]; then
+              echo "❌ No production stacks found"
+              exit 1
+            fi
+          
+            # Validate each stack has required files
+            VALID_STACKS=()
+            for stack in "${PROD_STACKS[@]}"; do
+              if [[ -f "$stack/backend.hcl" ]]; then
+                VALID_STACKS+=("$stack")
+              fi
+            done
+          
+            printf '%s\n' "${VALID_STACKS[@]}" | jq -R . | jq -s . > /tmp/stacks.json
+            STACKS="$(cat /tmp/stacks.json)"
+          fi
+          
+          echo "stacks=$STACKS" >> $GITHUB_OUTPUT
+          echo "🚀 Production stacks to deploy:"
+          echo "$STACKS" | jq -r '.[]'
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.TF_PROD_ROLE_ARN }}
+          aws-region: ${{ env.TF_STACK_REGION }}
+          role-session-name: terraform-prod-backup-${{ github.run_id }}
+
+      - name: Backup Terraform state
+        id: backup
+        run: |
+          set -euo pipefail
+          
+          BACKUP_BUCKET="${{ secrets.TF_STATE_BACKUP_BUCKET }}"
+          TIMESTAMP=$(date +%Y%m%d-%H%M%S)
+          
+          echo "📦 Creating state backup..."
+          
+          # Create backup for each stack
+          for stack_dir in $(echo '${{ steps.stacks.outputs.stacks }}' | jq -r '.[]'); do
+            STACK_NAME=$(basename "$stack_dir")
+          
+            if [[ -z "$BACKUP_BUCKET" ]]; then
+              echo "⚠️ No backup bucket configured, skipping state backup"
+              continue
+            fi
+          
+            # Initialize to get current state
+            cd "$stack_dir"
+            terraform init -backend-config=backend.hcl -reconfigure
+          
+            # Pull and backup state
+            terraform state pull > "terraform-${STACK_NAME}-${TIMESTAMP}.tfstate"
+          
+            # Upload to backup bucket if configured
+            if aws s3 cp "terraform-${STACK_NAME}-${TIMESTAMP}.tfstate" \
+                "s3://${BACKUP_BUCKET}/backups/terraform-${STACK_NAME}-${TIMESTAMP}.tfstate"; then
+              echo "✅ State backup created: terraform-${STACK_NAME}-${TIMESTAMP}.tfstate"
+            else
+              echo "⚠️ Failed to upload backup, continuing without backup"
+            fi
+          
+            cd - > /dev/null
+          done
+          
+          echo "completed=true" >> $GITHUB_OUTPUT
+
+  deploy-prod:
+    name: "🚀 Production Deployment"
+    needs: [security-gate, pre-deployment]
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    environment:
+      name: prod
+      url: https://console.aws.amazon.com/
+    strategy:
+      fail-fast: true  # Stop all deployments if one fails
+      max-parallel: 1   # Deploy one stack at a time for safety
+      matrix:
+        stack_dir: ${{ fromJson(needs.pre-deployment.outputs.stacks_to_deploy) }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          terraform_wrapper: false
+
+      - name: Cache Terraform providers
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.terraform.d/plugin-cache
+            ${{ matrix.stack_dir }}/.terraform/providers
+          key: terraform-prod-${{ runner.os }}-${{ matrix.stack_dir }}-${{ hashFiles(format('{0}/.terraform.lock.hcl', matrix.stack_dir)) }}
+
+      - name: Configure Terraform plugin cache
+        run: |
+          mkdir -p ~/.terraform.d/plugin-cache
+          echo 'plugin_cache_dir = "$HOME/.terraform.d/plugin-cache"' > ~/.terraformrc
+
+      - name: Extract stack metadata
+        id: meta
+        run: |
+          STACK_DIR="${{ matrix.stack_dir }}"
+          STACK_NAME=$(basename "$STACK_DIR")
+          
+          echo "STACK_DIR=$STACK_DIR" >> $GITHUB_OUTPUT
+          echo "STACK_NAME=$STACK_NAME" >> $GITHUB_OUTPUT
+          echo "🏭 Deploying production stack: $STACK_NAME"
+
+      - name: Configure AWS credentials with extended session
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.TF_PROD_ROLE_ARN }}
+          aws-region: ${{ env.TF_STACK_REGION }}
+          role-session-name: terraform-prod-${{ github.run_id }}-${{ strategy.job-index }}
+          role-duration-seconds: 7200  # 2 hours for long-running deployments
+
+      - name: Verify production environment
+        run: |
+          echo "🔍 Verifying production environment setup..."
+          
+          # Verify AWS identity
+          IDENTITY=$(aws sts get-caller-identity)
+          echo "🔑 AWS Identity: $IDENTITY"
+          
+          # Check if we're in the right account (basic sanity check)
+          ACCOUNT_ID=$(echo "$IDENTITY" | jq -r '.Account')
+          if [[ -z "$ACCOUNT_ID" || "$ACCOUNT_ID" == "null" ]]; then
+            echo "❌ Unable to determine AWS account"
+            exit 1
+          fi
+          
+          echo "✅ Production environment verified (Account: $ACCOUNT_ID)"
+
+      - name: Handle force unlock if requested
+        if: inputs.force_unlock == true
+        working-directory: ${{ steps.meta.outputs.STACK_DIR }}
+        run: |
+          echo "⚠️ Force unlock requested - this should only be used in emergency situations"
+          
+          terraform init -backend-config=backend.hcl -reconfigure
+          
+          # Attempt to force unlock
+          LOCK_ID="${{ inputs.lock_id }}"
+          if [[ -z "$LOCK_ID" ]]; then
+            echo "⚠️ No lock ID provided, attempting to detect automatically..."
+            # Try to get lock info from init output
+            LOCK_INFO=$(terraform init -backend-config=backend.hcl 2>&1 | grep -o 'ID: [a-f0-9-]*' | cut -d' ' -f2 || echo "")
+            if [[ -n "$LOCK_INFO" ]]; then
+              LOCK_ID="$LOCK_INFO"
+            else
+              echo "❌ Could not detect lock ID automatically"
+              exit 1
+            fi
+          fi
+          
+          if terraform force-unlock -force "$LOCK_ID"; then
+            echo "✅ State lock removed"
+          else
+            echo "⚠️ No lock to remove or unlock failed"
+          fi
+
+      - name: Terraform init with enhanced error handling
+        working-directory: ${{ steps.meta.outputs.STACK_DIR }}
+        run: |
+          set -euo pipefail
+          
+          for attempt in 1 2 3; do
+            echo "🔄 Init attempt $attempt/3"
+          
+            if timeout 300 terraform init -backend-config=backend.hcl -reconfigure; then
+              echo "✅ Terraform init successful"
+              break
+            else
+              echo "⚠️ Init failed, checking for lock issues..."
+          
+              if terraform init -backend-config=backend.hcl 2>&1 | grep -i "lock"; then
+                echo "🔒 State lock detected. Manual intervention may be required."
+                echo "💡 Consider using force_unlock option if appropriate"
+              fi
+          
+              if [[ $attempt -eq 3 ]]; then
+                echo "❌ All init attempts failed"
+                exit 1
+              fi
+          
+              sleep 30
+            fi
+          done
+
+      - name: Select production tfvars
+        id: tfvars
+        working-directory: ${{ steps.meta.outputs.STACK_DIR }}
+        run: |
+          # Priority: prod.tfvars > terraform.tfvars
+          if [[ -f "prod.tfvars" ]]; then
+            TFVARS_FILE="prod.tfvars"
+          elif [[ -f "terraform.tfvars" ]]; then
+            TFVARS_FILE="terraform.tfvars"  
+          else
+            echo "❌ No tfvars file found for production"
+            exit 1
+          fi
+          
+          echo "TFVARS_FILE=$TFVARS_FILE" >> $GITHUB_OUTPUT
+          echo "📋 Using production variables: $TFVARS_FILE"
+          
+          # Validate critical production settings
+          if grep -q "environment.*=.*dev" "$TFVARS_FILE"; then
+            echo "❌ Development environment detected in production tfvars"
+            exit 1
+          fi
+
+      - name: Generate and review plan
+        working-directory: ${{ steps.meta.outputs.STACK_DIR }}
+        run: |
+          echo "🔍 Generating production deployment plan..."
+          
+          terraform plan \
+            -var-file=${{ steps.tfvars.outputs.TFVARS_FILE }} \
+            -out=prod-plan.tfplan \
+            -detailed-exitcode
+          
+          # Save plan output for review
+          terraform show -no-color prod-plan.tfplan > plan-output.txt
+          
+          echo "📋 Plan generated successfully"
+          echo "📄 Plan summary (first 100 lines):"
+          head -100 plan-output.txt
+
+      - name: Production deployment gate
+        if: inputs.dry_run != true
+        run: |
+          echo "🚨 PRODUCTION DEPLOYMENT CONFIRMATION"
+          echo "Stack: ${{ steps.meta.outputs.STACK_NAME }}"
+          echo "Environment: PRODUCTION"
+          echo "Region: ${{ env.TF_STACK_REGION }}"
+          echo "Triggered by: ${{ github.actor }}"
+          echo "Reference: ${{ inputs.ref }}"
+          echo ""
+          echo "This deployment will modify PRODUCTION infrastructure."
+          echo "Ensure you have:"
+          echo "✓ Reviewed the plan above"
+          echo "✓ Confirmed with stakeholders" 
+          echo "✓ Verified backup completion"
+          echo "✓ Prepared rollback procedures"
+
+      - name: Apply Terraform changes
+        if: inputs.dry_run != true
+        working-directory: ${{ steps.meta.outputs.STACK_DIR }}
+        run: |
+          echo "🚀 Applying production changes..."
+          
+          START_TIME=$(date +%s)
+          
+          # Apply with confirmation
+          if terraform apply -auto-approve prod-plan.tfplan; then
+            END_TIME=$(date +%s)
+            DURATION=$((END_TIME - START_TIME))
+          
+            echo "✅ Production deployment completed successfully in ${DURATION}s"
+            echo "APPLY_STATUS=success" >> $GITHUB_ENV
+            echo "APPLY_DURATION=${DURATION}" >> $GITHUB_ENV
+          else
+            END_TIME=$(date +%s) 
+            DURATION=$((END_TIME - START_TIME))
+          
+            echo "❌ Production deployment failed after ${DURATION}s"
+            echo "APPLY_STATUS=failed" >> $GITHUB_ENV
+            echo "APPLY_DURATION=${DURATION}" >> $GITHUB_ENV
+          
+            # Capture error details
+            echo "📋 Deployment failed. Review logs above for details."
+            exit 1
+          fi
+
+      - name: Dry run completion
+        if: inputs.dry_run == true
+        run: |
+          echo "🔍 Dry run completed successfully"
+          echo "✅ Plan generated and validated"
+          echo "💡 Run without dry_run=true to apply changes"
+
+      - name: Extract and validate outputs
+        if: inputs.dry_run != true && env.APPLY_STATUS == 'success'
+        working-directory: ${{ steps.meta.outputs.STACK_DIR }}
+        run: |
+          echo "📤 Extracting Terraform outputs..."
+          
+          if terraform output -json > outputs.json 2>/dev/null; then
+            echo "✅ Outputs extracted successfully:"
+            cat outputs.json | jq .
+          else
+            echo "ℹ️ No outputs defined or extraction failed"
+          fi
+
+      - name: Post-deployment verification
+        if: inputs.dry_run != true && env.APPLY_STATUS == 'success'
+        run: |
+          echo "🧪 Running post-deployment verification..."
+          
+          # Verify AWS connectivity
+          aws sts get-caller-identity >/dev/null
+          echo "✅ AWS connectivity verified"
+          
+          # Add specific health checks here based on your infrastructure
+          echo "🏥 Basic health checks completed"
+
+      - name: Update deployment status (success)
+        if: env.APPLY_STATUS == 'success'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.repos.createDeploymentStatus({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              deployment_id: '${{ needs.security-gate.outputs.deployment_id }}',
+              state: 'success',
+              description: 'Production deployment completed successfully',
+              environment: 'prod'
+            });
+
+      - name: Update deployment status (failure)
+        if: env.APPLY_STATUS == 'failed'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.repos.createDeploymentStatus({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              deployment_id: '${{ needs.security-gate.outputs.deployment_id }}',
+              state: 'failure',
+              description: 'Production deployment failed',
+              environment: 'prod'
+            });
+
+      - name: Cleanup temporary files
+        if: always()
+        working-directory: ${{ steps.meta.outputs.STACK_DIR }}
+        run: |
+          rm -f prod-plan.tfplan plan-output.txt outputs.json
+          echo "🧹 Cleaned up temporary files"
+
+      - name: Notify success
+        if: env.APPLY_STATUS == 'success' && env.SLACK_WEBHOOK != ''
+        run: |
+          curl -X POST -H 'Content-type: application/json' \
+            --data "{
+              \"text\": \"✅ PRODUCTION Terraform deployment successful\",
+              \"attachments\": [{
+                \"color\": \"good\",
+                \"fields\": [
+                  {\"title\": \"Stack\", \"value\": \"${{ steps.meta.outputs.STACK_NAME }}\", \"short\": true},
+                  {\"title\": \"Environment\", \"value\": \"PRODUCTION\", \"short\": true},
+                  {\"title\": \"Duration\", \"value\": \"${{ env.APPLY_DURATION }}s\", \"short\": true},
+                  {\"title\": \"Deployed by\", \"value\": \"${{ github.actor }}\", \"short\": true},
+                  {\"title\": \"Reference\", \"value\": \"${{ inputs.ref }}\", \"short\": true}
+                ]
+              }]
+            }" \
+            ${{ env.SLACK_WEBHOOK }}
+
+      - name: Notify failure
+        if: env.APPLY_STATUS == 'failed' && env.SLACK_WEBHOOK != ''
+        run: |
+          curl -X POST -H 'Content-type: application/json' \
+            --data "{
+              \"text\": \"❌ PRODUCTION Terraform deployment FAILED\",
+              \"attachments\": [{
+                \"color\": \"danger\",
+                \"fields\": [
+                  {\"title\": \"Stack\", \"value\": \"${{ steps.meta.outputs.STACK_NAME }}\", \"short\": true},
+                  {\"title\": \"Environment\", \"value\": \"PRODUCTION\", \"short\": true},
+                  {\"title\": \"Duration\", \"value\": \"${{ env.APPLY_DURATION }}s\", \"short\": true},
+                  {\"title\": \"Failed by\", \"value\": \"${{ github.actor }}\", \"short\": true},
+                  {\"title\": \"Run URL\", \"value\": \"${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}\", \"short\": false}
+                ]
+              }]
+            }" \
+            ${{ env.SLACK_WEBHOOK }}

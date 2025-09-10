@@ -1,0 +1,284 @@
+name: "Atlantis Workflow Integration"
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: "Target environment"
+        required: true
+        type: choice
+        options:
+          - dev
+          - staging
+          - prod
+      action:
+        description: "Action to perform"
+        required: true
+        type: choice
+        options:
+          - deploy
+          - update
+          - rollback
+          - health-check
+      stack_name:
+        description: "Specific stack (optional)"
+        required: false
+        type: string
+
+permissions:
+  id-token: write
+  contents: read
+  actions: write
+  deployments: write
+
+env:
+  TF_VERSION: "1.7.5"
+  REGION: ${{ vars.TF_STACK_REGION || 'ap-northeast-2' }}
+
+jobs:
+  atlantis-operation:
+    name: "🌊 Atlantis Operation"
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ inputs.environment == 'prod' && secrets.TF_PROD_ROLE_ARN || secrets.TF_DEV_ROLE_ARN }}
+          aws-region: ${{ env.REGION }}
+          role-session-name: atlantis-${{ inputs.environment }}-${{ github.run_id }}
+
+      - name: Setup prerequisites
+        run: |
+          # Install required tools
+          curl -LO "https://github.com/runatlantis/atlantis/releases/download/v0.27.2/atlantis_linux_amd64.zip"
+          unzip atlantis_linux_amd64.zip
+          chmod +x atlantis
+          sudo mv atlantis /usr/local/bin/
+
+      - name: Validate environment
+        run: |
+          echo "🔍 Validating ${{ inputs.environment }} environment..."
+          
+          # Check if Atlantis is running
+          ATLANTIS_URL="https://${{ inputs.environment == 'prod' && 'atlantis' || inputs.environment }}-atlantis.${{ vars.DOMAIN || 'example.com' }}"
+          
+          if curl -f "$ATLANTIS_URL/healthz" >/dev/null 2>&1; then
+            echo "✅ Atlantis is healthy at $ATLANTIS_URL"
+          else
+            echo "⚠️ Atlantis health check failed at $ATLANTIS_URL"
+            
+            # Try to find Atlantis URL from parameter store
+            ALT_URL=$(aws ssm get-parameter \
+              --name "/atlantis/${{ inputs.environment }}/url" \
+              --query "Parameter.Value" \
+              --output text 2>/dev/null || echo "")
+            
+            if [[ -n "$ALT_URL" ]]; then
+              echo "🔄 Trying alternative URL: $ALT_URL"
+              ATLANTIS_URL="$ALT_URL"
+            fi
+          fi
+          
+          echo "ATLANTIS_URL=$ATLANTIS_URL" >> $GITHUB_ENV
+
+      - name: Deploy Atlantis
+        if: inputs.action == 'deploy'
+        run: |
+          echo "🚀 Deploying Atlantis to ${{ inputs.environment }}..."
+          cd atlantis-ecs
+          
+          # Environment-specific deployment
+          case "${{ inputs.environment }}" in
+            "dev")
+              ./quick-deploy.sh \
+                --org ${{ vars.ORG_NAME }} \
+                --github-token ${{ secrets.ATLANTIS_GITHUB_TOKEN }} \
+                --environment dev \
+                --vpc-id ${{ secrets.DEV_VPC_ID }}
+              ;;
+            "staging")
+              ./quick-deploy.sh \
+                --org ${{ vars.ORG_NAME }} \
+                --github-token ${{ secrets.ATLANTIS_GITHUB_TOKEN }} \
+                --environment staging \
+                --vpc-id ${{ secrets.STAGING_VPC_ID }} \
+                --custom-domain staging-atlantis.${{ vars.DOMAIN }}
+              ;;
+            "prod")
+              ./quick-deploy.sh \
+                --org ${{ vars.ORG_NAME }} \
+                --github-token ${{ secrets.ATLANTIS_GITHUB_TOKEN }} \
+                --environment prod \
+                --vpc-id ${{ secrets.PROD_VPC_ID }} \
+                --custom-domain atlantis.${{ vars.DOMAIN }} \
+                --certificate-arn ${{ secrets.PROD_CERTIFICATE_ARN }} \
+                --enable-ai-reviewer \
+                --openai-key ${{ secrets.OPENAI_API_KEY }} \
+                --slack-webhook ${{ secrets.SLACK_WEBHOOK_URL }}
+              ;;
+          esac
+
+      - name: Update Atlantis
+        if: inputs.action == 'update'
+        run: |
+          echo "🔄 Updating Atlantis in ${{ inputs.environment }}..."
+          
+          # Force update ECS service
+          aws ecs update-service \
+            --cluster ${{ inputs.environment }}-atlantis \
+            --service ${{ inputs.environment }}-atlantis \
+            --force-new-deployment \
+            --no-cli-pager
+
+      - name: Health check
+        if: inputs.action == 'health-check' || inputs.action == 'deploy' || inputs.action == 'update'
+        run: |
+          echo "🏥 Running comprehensive health check..."
+          
+          # Wait for service to be stable
+          echo "⏳ Waiting for service to stabilize..."
+          aws ecs wait services-stable \
+            --cluster ${{ inputs.environment }}-atlantis \
+            --services ${{ inputs.environment }}-atlantis \
+            --no-cli-pager
+
+          # Test Atlantis endpoints
+          echo "🔍 Testing Atlantis endpoints..."
+          
+          # Health endpoint
+          if curl -f "$ATLANTIS_URL/healthz"; then
+            echo "✅ Health endpoint OK"
+          else
+            echo "❌ Health endpoint failed"
+            exit 1
+          fi
+          
+          # Events endpoint (should return JSON)
+          if curl -f "$ATLANTIS_URL/events" | jq . >/dev/null 2>&1; then
+            echo "✅ Events endpoint OK"
+          else
+            echo "⚠️ Events endpoint check failed"
+          fi
+          
+          # Check ECS service status
+          SERVICE_STATUS=$(aws ecs describe-services \
+            --cluster ${{ inputs.environment }}-atlantis \
+            --services ${{ inputs.environment }}-atlantis \
+            --query 'services[0].status' \
+            --output text)
+          
+          if [[ "$SERVICE_STATUS" == "ACTIVE" ]]; then
+            echo "✅ ECS service is active"
+          else
+            echo "❌ ECS service status: $SERVICE_STATUS"
+            exit 1
+          fi
+
+      - name: Rollback Atlantis
+        if: inputs.action == 'rollback'
+        run: |
+          echo "⏪ Rolling back Atlantis in ${{ inputs.environment }}..."
+          
+          # Get previous task definition
+          PREVIOUS_TASK_DEF=$(aws ecs describe-services \
+            --cluster ${{ inputs.environment }}-atlantis \
+            --services ${{ inputs.environment }}-atlantis \
+            --query 'services[0].taskDefinition' \
+            --output text)
+          
+          # Get the family name
+          FAMILY=$(echo $PREVIOUS_TASK_DEF | cut -d'/' -f2 | cut -d':' -f1)
+          
+          # List revisions to find the previous one
+          REVISIONS=$(aws ecs list-task-definitions \
+            --family-prefix $FAMILY \
+            --status ACTIVE \
+            --sort DESC \
+            --query 'taskDefinitionArns[1]' \
+            --output text)
+          
+          if [[ "$REVISIONS" != "None" && -n "$REVISIONS" ]]; then
+            echo "🔄 Rolling back to: $REVISIONS"
+            
+            # Update service to use previous task definition
+            aws ecs update-service \
+              --cluster ${{ inputs.environment }}-atlantis \
+              --service ${{ inputs.environment }}-atlantis \
+              --task-definition $REVISIONS \
+              --no-cli-pager
+              
+            echo "✅ Rollback initiated"
+          else
+            echo "❌ No previous task definition found for rollback"
+            exit 1
+          fi
+
+      - name: Post-operation validation
+        if: always()
+        run: |
+          echo "📊 Collecting post-operation metrics..."
+          
+          # Get service details
+          aws ecs describe-services \
+            --cluster ${{ inputs.environment }}-atlantis \
+            --services ${{ inputs.environment }}-atlantis \
+            --no-cli-pager
+          
+          # Get recent logs
+          LOG_GROUP="/ecs/${{ inputs.environment }}-atlantis"
+          echo "📜 Recent logs from $LOG_GROUP:"
+          aws logs tail $LOG_GROUP --since 10m --no-cli-pager || echo "⚠️ Unable to fetch logs"
+          
+          # Check CloudWatch alarms
+          ALARM_PREFIX="${{ inputs.environment }}-atlantis"
+          ALARMS=$(aws cloudwatch describe-alarms \
+            --alarm-name-prefix $ALARM_PREFIX \
+            --state-value ALARM \
+            --query 'MetricAlarms[].AlarmName' \
+            --output text 2>/dev/null || echo "")
+          
+          if [[ -n "$ALARMS" && "$ALARMS" != "None" ]]; then
+            echo "🚨 Active alarms: $ALARMS"
+          else
+            echo "✅ No active alarms"
+          fi
+
+      - name: Notify operation status
+        if: always()
+        run: |
+          STATUS="${{ job.status }}"
+          ACTION="${{ inputs.action }}"
+          ENV="${{ inputs.environment }}"
+          
+          if [[ -n "${{ secrets.SLACK_WEBHOOK_URL }}" ]]; then
+            if [[ "$STATUS" == "success" ]]; then
+              COLOR="good"
+              EMOJI="✅"
+              MESSAGE="Atlantis $ACTION completed successfully"
+            else
+              COLOR="danger"
+              EMOJI="❌"
+              MESSAGE="Atlantis $ACTION failed"
+            fi
+            
+            curl -X POST -H 'Content-type: application/json' \
+              --data "{
+                \"text\": \"$EMOJI $MESSAGE\",
+                \"attachments\": [{
+                  \"color\": \"$COLOR\",
+                  \"fields\": [
+                    {\"title\": \"Environment\", \"value\": \"$ENV\", \"short\": true},
+                    {\"title\": \"Action\", \"value\": \"$ACTION\", \"short\": true},
+                    {\"title\": \"Status\", \"value\": \"$STATUS\", \"short\": true},
+                    {\"title\": \"Triggered by\", \"value\": \"${{ github.actor }}\", \"short\": true},
+                    {\"title\": \"Run URL\", \"value\": \"${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}\", \"short\": false}
+                  ]
+                }]
+              }" \
+              ${{ secrets.SLACK_WEBHOOK_URL }}
+          fi

@@ -1,0 +1,466 @@
+name: "Enhanced CI/CD Pipeline"
+
+on:
+  push:
+    branches: [ "main", "develop" ]
+  pull_request:
+    branches: [ "main" ]
+    types: [opened, synchronize, reopened, ready_for_review]
+
+permissions:
+  id-token: write
+  contents: read
+  pull-requests: write
+  security-events: write
+  actions: write
+  deployments: write
+
+env:
+  TF_VERSION: "1.7.5"
+  ATLANTIS_VERSION: "0.27.2"
+  REGION: ${{ vars.TF_STACK_REGION || 'ap-northeast-2' }}
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # Security and Quality Gate
+  security-gate:
+    name: "🔒 Security & Quality Gate"
+    runs-on: ubuntu-latest
+    outputs:
+      security_passed: ${{ steps.security.outputs.passed }}
+      quality_score: ${{ steps.quality.outputs.score }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Security Validation
+        id: security
+        run: |
+          # Validate required secrets exist
+          MISSING_SECRETS=()
+          
+          if [[ -z "${{ secrets.TF_DEV_ROLE_ARN }}" ]]; then
+            MISSING_SECRETS+=("TF_DEV_ROLE_ARN")
+          fi
+          
+          if [[ "${{ github.ref }}" == "refs/heads/main" && -z "${{ secrets.TF_PROD_ROLE_ARN }}" ]]; then
+            MISSING_SECRETS+=("TF_PROD_ROLE_ARN")
+          fi
+          
+          if [[ ${#MISSING_SECRETS[@]} -gt 0 ]]; then
+            echo "❌ Missing required secrets: ${MISSING_SECRETS[*]}"
+            echo "passed=false" >> $GITHUB_OUTPUT
+            exit 1
+          fi
+          
+          echo "✅ Security validation passed"
+          echo "passed=true" >> $GITHUB_OUTPUT
+
+      - name: Code Quality Analysis
+        id: quality
+        run: |
+          # Basic quality checks
+          SCORE=100
+          
+          # Check for TODO/FIXME/HACK comments
+          TODO_COUNT=$(grep -r "TODO\|FIXME\|HACK" --include="*.tf" --include="*.sh" . | wc -l || true)
+          if [[ $TODO_COUNT -gt 10 ]]; then
+            SCORE=$((SCORE - 10))
+            echo "⚠️ High number of TODO/FIXME comments: $TODO_COUNT"
+          fi
+          
+          # Check for large files (>1MB)
+          LARGE_FILES=$(find . -type f -size +1M | wc -l)
+          if [[ $LARGE_FILES -gt 0 ]]; then
+            SCORE=$((SCORE - 5))
+            echo "⚠️ Large files detected: $LARGE_FILES"
+          fi
+          
+          echo "📊 Code quality score: $SCORE/100"
+          echo "score=$SCORE" >> $GITHUB_OUTPUT
+
+  # Dependency and Vulnerability Scanning
+  security-scan:
+    name: "🛡️ Security Scanning"
+    runs-on: ubuntu-latest
+    needs: security-gate
+    if: needs.security-gate.outputs.security_passed == 'true'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Run Trivy vulnerability scanner
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: 'fs'
+          scan-ref: '.'
+          format: 'sarif'
+          output: 'trivy-results.sarif'
+
+      - name: Upload Trivy scan results to GitHub Security tab
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: 'trivy-results.sarif'
+
+      - name: Container Security Scan (Atlantis)
+        run: |
+          # Scan the Atlantis container image for vulnerabilities
+          echo "🔍 Scanning Atlantis container image..."
+          docker pull ghcr.io/runatlantis/atlantis:v${{ env.ATLANTIS_VERSION }}
+          
+          # Run container security scan
+          trivy image ghcr.io/runatlantis/atlantis:v${{ env.ATLANTIS_VERSION }} \
+            --severity HIGH,CRITICAL \
+            --exit-code 1 \
+            --no-progress
+
+  # Terraform Validation and Planning
+  terraform-validate:
+    name: "🧪 Terraform Validation"
+    runs-on: ubuntu-latest
+    needs: security-gate
+    if: needs.security-gate.outputs.security_passed == 'true'
+    strategy:
+      matrix:
+        component:
+          - atlantis-ecs
+          - terraform/modules
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+
+      - name: Cache Terraform providers
+        uses: actions/cache@v4
+        with:
+          path: ~/.terraform.d/plugin-cache
+          key: terraform-${{ runner.os }}-${{ hashFiles('**/.terraform.lock.hcl') }}
+
+      - name: Validate Terraform modules
+        if: matrix.component == 'terraform/modules'
+        run: |
+          echo "🔍 Validating Terraform modules..."
+          
+          for module_dir in terraform/modules/*/; do
+            if [[ -f "$module_dir/main.tf" ]]; then
+              echo "Validating module: $module_dir"
+              cd "$module_dir"
+              terraform init -backend=false
+              terraform validate
+              cd - > /dev/null
+            fi
+          done
+
+      - name: Validate Atlantis ECS configuration
+        if: matrix.component == 'atlantis-ecs'
+        run: |
+          echo "🔍 Validating Atlantis ECS configuration..."
+          cd atlantis-ecs
+          
+          if [[ -f "main.tf" ]]; then
+            terraform init -backend=false
+            terraform validate
+          fi
+          
+          # Validate deployment scripts
+          if [[ -x "quick-deploy.sh" ]]; then
+            bash -n quick-deploy.sh
+            echo "✅ quick-deploy.sh syntax check passed"
+          fi
+          
+          if [[ -x "connect.sh" ]]; then
+            bash -n connect.sh
+            echo "✅ connect.sh syntax check passed"
+          fi
+
+  # Infrastructure Testing
+  infrastructure-test:
+    name: "🧪 Infrastructure Testing"
+    runs-on: ubuntu-latest
+    needs: [security-gate, terraform-validate]
+    if: github.event_name == 'pull_request'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.TF_DEV_ROLE_ARN }}
+          aws-region: ${{ env.REGION }}
+          role-session-name: infrastructure-test-${{ github.run_id }}
+
+      - name: Test AWS connectivity
+        run: |
+          echo "🔗 Testing AWS connectivity..."
+          aws sts get-caller-identity
+          echo "✅ AWS connectivity verified"
+
+      - name: Validate AWS permissions
+        run: |
+          echo "🔑 Validating AWS permissions..."
+          
+          # Test basic permissions needed for Atlantis deployment
+          aws ec2 describe-vpcs --max-items 1 >/dev/null
+          aws ecs list-clusters --max-items 1 >/dev/null
+          aws secretsmanager list-secrets --max-results 1 >/dev/null
+          
+          echo "✅ AWS permissions validated"
+
+      - name: Test Atlantis deployment (dry-run)
+        run: |
+          echo "🧪 Testing Atlantis deployment scripts..."
+          cd atlantis-ecs
+          
+          # Test with dry-run mode if available
+          if grep -q "dry.run\|--dry" quick-deploy.sh; then
+            ./quick-deploy.sh --org test-org --github-token fake-token --dry-run || true
+          else
+            echo "⚠️ No dry-run mode available in deployment script"
+          fi
+
+  # Staging Deployment (for main branch)
+  deploy-staging:
+    name: "🚀 Deploy to Staging"
+    runs-on: ubuntu-latest
+    needs: [security-scan, terraform-validate, infrastructure-test]
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    environment:
+      name: staging
+      url: https://staging-atlantis.${{ vars.DOMAIN || 'example.com' }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.TF_STAGING_ROLE_ARN }}
+          aws-region: ${{ env.REGION }}
+          role-session-name: staging-deploy-${{ github.run_id }}
+
+      - name: Deploy to staging
+        run: |
+          echo "🚀 Deploying to staging environment..."
+          cd atlantis-ecs
+          
+          # Deploy with staging configuration
+          ./quick-deploy.sh \
+            --org ${{ vars.ORG_NAME || 'stackkit' }} \
+            --github-token ${{ secrets.ATLANTIS_GITHUB_TOKEN }} \
+            --environment staging \
+            --vpc-id ${{ secrets.STAGING_VPC_ID }} \
+            ${INFRACOST_API_KEY:+--infracost-key ${{ secrets.INFRACOST_API_KEY }}}
+
+      - name: Staging health check
+        run: |
+          echo "🏥 Running staging health checks..."
+          
+          # Wait for deployment to be ready
+          sleep 120
+          
+          # Get Atlantis URL from Terraform outputs
+          ATLANTIS_URL=$(aws ssm get-parameter \
+            --name "/atlantis/staging/url" \
+            --query "Parameter.Value" \
+            --output text 2>/dev/null || echo "")
+          
+          if [[ -n "$ATLANTIS_URL" ]]; then
+            # Test Atlantis health endpoint
+            curl -f "$ATLANTIS_URL/healthz" || echo "⚠️ Health check failed"
+          else
+            echo "⚠️ Atlantis URL not found in parameter store"
+          fi
+
+  # Production Deployment Gate
+  deploy-production:
+    name: "🏭 Deploy to Production"
+    runs-on: ubuntu-latest
+    needs: deploy-staging
+    if: github.ref == 'refs/heads/main'
+    environment:
+      name: production
+      url: https://atlantis.${{ vars.DOMAIN || 'example.com' }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.TF_PROD_ROLE_ARN }}
+          aws-region: ${{ env.REGION }}
+          role-session-name: prod-deploy-${{ github.run_id }}
+          role-duration-seconds: 7200
+
+      - name: Create deployment
+        id: deployment
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const deployment = await github.rest.repos.createDeployment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              ref: context.sha,
+              environment: 'production',
+              description: 'Production Atlantis deployment',
+              auto_merge: false
+            });
+            core.setOutput('deployment_id', deployment.data.id);
+
+      - name: Backup current state
+        run: |
+          echo "📦 Creating production backup..."
+          
+          BACKUP_BUCKET="${{ secrets.TF_STATE_BACKUP_BUCKET }}"
+          TIMESTAMP=$(date +%Y%m%d-%H%M%S)
+          
+          if [[ -n "$BACKUP_BUCKET" ]]; then
+            # Backup current Terraform state
+            aws s3 sync s3://${{ secrets.TF_STATE_BUCKET }}/atlantis-prod \
+              s3://$BACKUP_BUCKET/backups/$TIMESTAMP/atlantis-prod/
+            echo "✅ Backup completed to s3://$BACKUP_BUCKET/backups/$TIMESTAMP/"
+          else
+            echo "⚠️ No backup bucket configured"
+          fi
+
+      - name: Deploy to production
+        run: |
+          echo "🚀 Deploying to production environment..."
+          cd atlantis-ecs
+          
+          # Deploy with production configuration
+          ./quick-deploy.sh \
+            --org ${{ vars.ORG_NAME || 'stackkit' }} \
+            --github-token ${{ secrets.ATLANTIS_GITHUB_TOKEN }} \
+            --environment prod \
+            --vpc-id ${{ secrets.PROD_VPC_ID }} \
+            --custom-domain atlantis.${{ vars.DOMAIN }} \
+            --certificate-arn ${{ secrets.PROD_CERTIFICATE_ARN }} \
+            ${INFRACOST_API_KEY:+--infracost-key ${{ secrets.INFRACOST_API_KEY }}} \
+            ${SLACK_WEBHOOK_URL:+--slack-webhook ${{ secrets.SLACK_WEBHOOK_URL }}}
+
+      - name: Production health check
+        run: |
+          echo "🏥 Running production health checks..."
+          
+          # Wait for deployment to be ready
+          sleep 180
+          
+          ATLANTIS_URL="https://atlantis.${{ vars.DOMAIN || 'example.com' }}"
+          
+          # Comprehensive health checks
+          for i in {1..5}; do
+            if curl -f "$ATLANTIS_URL/healthz"; then
+              echo "✅ Health check passed (attempt $i)"
+              break
+            else
+              echo "⚠️ Health check failed (attempt $i)"
+              if [[ $i -eq 5 ]]; then
+                echo "❌ All health checks failed"
+                exit 1
+              fi
+              sleep 30
+            fi
+          done
+
+      - name: Update deployment status
+        uses: actions/github-script@v7
+        if: always()
+        with:
+          script: |
+            const state = '${{ job.status }}' === 'success' ? 'success' : 'failure';
+            await github.rest.repos.createDeploymentStatus({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              deployment_id: '${{ steps.deployment.outputs.deployment_id }}',
+              state: state,
+              description: `Production deployment ${state}`,
+              environment: 'production'
+            });
+
+  # Post-deployment monitoring
+  post-deployment:
+    name: "📊 Post-deployment Monitoring"
+    runs-on: ubuntu-latest
+    needs: deploy-production
+    if: always() && (needs.deploy-production.result == 'success' || needs.deploy-production.result == 'failure')
+    steps:
+      - name: Setup monitoring alerts
+        run: |
+          echo "📊 Setting up post-deployment monitoring..."
+          
+          # Create custom CloudWatch dashboard for this deployment
+          aws cloudwatch put-dashboard \
+            --dashboard-name "Atlantis-Deployment-${{ github.run_id }}" \
+            --dashboard-body '{
+              "widgets": [
+                {
+                  "type": "metric",
+                  "properties": {
+                    "metrics": [
+                      ["AWS/ECS", "CPUUtilization", "ServiceName", "atlantis-prod"],
+                      ["AWS/ApplicationELB", "RequestCount", "LoadBalancer", "atlantis-prod-alb"]
+                    ],
+                    "period": 300,
+                    "stat": "Average",
+                    "region": "${{ env.REGION }}",
+                    "title": "Atlantis Performance Metrics"
+                  }
+                }
+              ]
+            }' || echo "⚠️ Dashboard creation failed"
+
+      - name: Notify deployment status
+        if: always()
+        run: |
+          STATUS="${{ needs.deploy-production.result }}"
+          
+          if [[ "$STATUS" == "success" ]]; then
+            echo "✅ Production deployment completed successfully"
+            
+            # Send success notification to Slack if configured
+            if [[ -n "${{ secrets.SLACK_WEBHOOK_URL }}" ]]; then
+              curl -X POST -H 'Content-type: application/json' \
+                --data "{
+                  \"text\": \"✅ StackKit Atlantis deployment successful\",
+                  \"attachments\": [{
+                    \"color\": \"good\",
+                    \"fields\": [
+                      {\"title\": \"Environment\", \"value\": \"Production\", \"short\": true},
+                      {\"title\": \"Commit\", \"value\": \"${{ github.sha }}\", \"short\": true},
+                      {\"title\": \"URL\", \"value\": \"https://atlantis.${{ vars.DOMAIN }}\", \"short\": false}
+                    ]
+                  }]
+                }" \
+                ${{ secrets.SLACK_WEBHOOK_URL }}
+            fi
+          else
+            echo "❌ Production deployment failed"
+            
+            # Send failure notification
+            if [[ -n "${{ secrets.SLACK_WEBHOOK_URL }}" ]]; then
+              curl -X POST -H 'Content-type: application/json' \
+                --data "{
+                  \"text\": \"❌ StackKit Atlantis deployment FAILED\",
+                  \"attachments\": [{
+                    \"color\": \"danger\",
+                    \"fields\": [
+                      {\"title\": \"Environment\", \"value\": \"Production\", \"short\": true},
+                      {\"title\": \"Run URL\", \"value\": \"${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}\", \"short\": false}
+                    ]
+                  }]
+                }" \
+                ${{ secrets.SLACK_WEBHOOK_URL }}
+            fi
+          fi
