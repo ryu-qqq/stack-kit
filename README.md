@@ -13,15 +13,29 @@ StackKit은 팀이 5분만에 자신만의 Atlantis 구축하여 안전하고 �
 git clone https://github.com/ryu-qqq/stackkit.git
 cd stackkit
 
-# 2. Atlantis 서버 배포 (5분)
+# 2. 사전 준비 확인 (30초)
+./atlantis-ecs/scripts/check-prerequisites.sh
+
+# 3. Atlantis 서버 배포 (3가지 방법 중 선택)
+
+# 방법 1: 대화형 설정 마법사 (초보자 권장) 🧙‍♂️
 cd atlantis-ecs
+./quick-deploy.sh --interactive
+
+# 방법 2: 기본 배포 (빠른 설정)
+./quick-deploy.sh \
+  --org mycompany \
+  --github-token ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+
+# 방법 3: 고급 배포 (모든 기능 활성화)
 ./quick-deploy.sh \
   --org mycompany \
   --github-token ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx \
+  --vpc-id vpc-12345678 \
   --slack-webhook https://hooks.slack.com/services/xxx/xxx/xxx \
-  --vpc-id vpc-12345678  # 기존 VPC 사용 (권장)
+  --infracost-key ico-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
 
-# 3. 기존 저장소 연결 (1분)
+# 4. 기존 저장소 연결 (1분)
 ./connect.sh --atlantis-url http://mycompany-atlantis.aws.com \
   --repo-name myorg/myrepo \
   --github-token ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
@@ -194,7 +208,14 @@ done < repos.txt
 
 ---
 
-## 📚 추가 리소스
+## 📚 문서 가이드
+
+### 📖 단계별 가이드
+- **[📋 사전 준비 체크리스트](./docs/prerequisites.md)** - 5분 배포를 위한 환경 확인
+- **[⚡ 5분 빠른 시작](./docs/quick-start.md)** - 실제 타이머와 함께하는 배포 가이드
+- **[🔗 저장소 연결 가이드](./docs/repository-setup.md)** - 여러 저장소 관리 및 연결
+- **[🚀 고급 설정 가이드](./docs/advanced-configuration.md)** - 엔터프라이즈 급 커스터마이징
+- **[🔧 문제 해결 가이드](./docs/troubleshooting.md)** - 일반적인 문제와 해결 방법
 
 ### 🏗️ Terraform 모듈 활용
 StackKit에는 12개 AWS 서비스의 표준화된 모듈이 포함되어 있습니다:

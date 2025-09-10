@@ -1,283 +1,303 @@
-# Environment Configuration Module Outputs
-
 # ==============================================================================
-# ENVIRONMENT CONFIGURATION
+# ENVIRONMENT CONFIGURATION MODULE OUTPUTS - Enhanced Integration
 # ==============================================================================
 
-output "environment" {
-  description = "현재 환경 정보"
-  value = {
-    name         = var.environment
-    project_name = var.project_name
-    region       = data.aws_region.current.name
-    account_id   = data.aws_caller_identity.current.account_id
-  }
+# Environment Configurations
+output "environment_config" {
+  description = "현재 환경 설정"
+  value       = local.current_env_config
 }
-
-# ==============================================================================
-# RESOURCE CONFIGURATIONS
-# ==============================================================================
-
-output "instance_types" {
-  description = "환경별 인스턴스 타입 매핑"
-  value = merge(
-    local.current_env_config.instance_types,
-    var.override_instance_types
-  )
-}
-
-output "database_config" {
-  description = "데이터베이스 설정"
-  value = merge(
-    local.current_env_config.database,
-    var.override_database_config
-  )
-}
-
-output "monitoring_config" {
-  description = "모니터링 설정"
-  value = merge(
-    local.current_env_config.monitoring,
-    var.override_monitoring_config
-  )
-}
-
-output "security_config" {
-  description = "보안 설정"
-  value = merge(
-    local.current_env_config.security,
-    var.override_security_config
-  )
-}
-
-output "cost_optimization_config" {
-  description = "비용 최적화 설정"
-  value = local.current_env_config.cost_optimization
-}
-
-# ==============================================================================
-# NETWORK CONFIGURATIONS
-# ==============================================================================
 
 output "network_config" {
   description = "네트워크 설정"
-  value = merge(
-    local.current_network_config,
-    var.override_network_config
-  )
+  value       = local.current_network_config
 }
-
-output "vpc_config" {
-  description = "VPC 설정 (모듈에서 직접 사용 가능)"
-  value = {
-    cidr_block           = coalesce(var.override_network_config.vpc_cidr, local.current_network_config.vpc_cidr)
-    enable_dns_hostnames = coalesce(var.override_security_config.vpc_enable_dns_hostnames, local.current_env_config.security.vpc_enable_dns_hostnames)
-    enable_dns_support   = coalesce(var.override_security_config.vpc_enable_dns_support, local.current_env_config.security.vpc_enable_dns_support)
-    availability_zones   = coalesce(var.override_network_config.availability_zones, local.current_network_config.availability_zones)
-  }
-}
-
-output "subnet_config" {
-  description = "서브넷 설정"
-  value = {
-    public_cidrs   = coalesce(var.override_network_config.public_subnet_cidrs, local.current_network_config.public_subnet_cidrs)
-    private_cidrs  = coalesce(var.override_network_config.private_subnet_cidrs, local.current_network_config.private_subnet_cidrs)
-    database_cidrs = coalesce(var.override_network_config.database_subnet_cidrs, local.current_network_config.database_subnet_cidrs)
-  }
-}
-
-# ==============================================================================
-# SERVICE CONFIGURATIONS
-# ==============================================================================
 
 output "service_config" {
   description = "서비스별 설정"
-  value = merge(
-    local.current_service_config,
-    var.override_service_config
-  )
+  value       = local.current_service_config
 }
 
-output "ecs_config" {
-  description = "ECS 서비스 설정"
-  value = merge(
-    local.current_service_config.ecs,
-    coalesce(var.override_service_config.ecs, {})
-  )
+# Standard Tags
+output "standard_tags" {
+  description = "표준 태그"
+  value       = local.standard_tags
 }
 
-output "lambda_config" {
-  description = "Lambda 함수 설정"
-  value = merge(
-    local.current_service_config.lambda,
-    coalesce(var.override_service_config.lambda, {})
-  )
+output "final_tags" {
+  description = "최종 태그 (사용자 정의 태그 포함)"
+  value       = local.final_tags
 }
 
-output "cache_config" {
-  description = "캐시 서비스 설정"
-  value = merge(
-    local.current_service_config.cache,
-    coalesce(var.override_service_config.cache, {})
-  )
-}
-
-# ==============================================================================
-# SHARED RESOURCES
-# ==============================================================================
-
+# Shared Resources
 output "shared_kms_key" {
   description = "공유 KMS 키 정보"
   value = var.create_shared_kms_key ? {
-    key_id    = aws_kms_key.env_key[0].key_id
-    key_arn   = aws_kms_key.env_key[0].arn
-    alias_name = aws_kms_alias.env_key_alias[0].name
-    alias_arn  = aws_kms_alias.env_key_alias[0].arn
+    id          = aws_kms_key.env_key[0].id
+    arn         = aws_kms_key.env_key[0].arn
+    alias_name  = aws_kms_alias.env_key_alias[0].name
+    alias_arn   = aws_kms_alias.env_key_alias[0].arn
   } : null
 }
 
 output "shared_sns_topic" {
   description = "공유 SNS 토픽 정보"
   value = var.create_shared_sns_topic ? {
-    topic_arn  = aws_sns_topic.env_notifications[0].arn
-    topic_name = aws_sns_topic.env_notifications[0].name
+    arn          = aws_sns_topic.env_notifications[0].arn
+    name         = aws_sns_topic.env_notifications[0].name
+    display_name = aws_sns_topic.env_notifications[0].display_name
   } : null
 }
 
-# ==============================================================================
-# TAGGING
-# ==============================================================================
-
-output "standard_tags" {
-  description = "표준 태그 (모든 리소스에 적용)"
-  value       = local.final_tags
-}
-
-output "common_tags" {
-  description = "공통 태그 (표준 태그의 별칭, 기존 호환성용)"
-  value       = local.final_tags
-}
-
-# ==============================================================================
-# NAMING CONVENTIONS
-# ==============================================================================
-
-output "naming_convention" {
-  description = "표준 명명 규칙"
+# AWS Context
+output "aws_context" {
+  description = "AWS 컨텍스트 정보"
   value = {
-    prefix              = "${var.project_name}-${var.environment}"
-    project_environment = "${var.project_name}-${var.environment}"
-    
-    # 자주 사용되는 이름 패턴
-    patterns = {
-      resource_name = "${var.project_name}-${var.environment}-{resource_type}-{specific_name}"
-      iam_role     = "${var.project_name}-${var.environment}-{service}-role"
-      policy_name  = "${var.project_name}-${var.environment}-{service}-policy"
-      sg_name      = "${var.project_name}-${var.environment}-{service}-sg"
-      log_group    = "/aws/{service}/${var.project_name}-${var.environment}-{specific_name}"
-    }
+    account_id         = data.aws_caller_identity.current.account_id
+    region            = data.aws_region.current.name
+    availability_zones = data.aws_availability_zones.available.names
   }
 }
 
 # ==============================================================================
-# COMPUTED VALUES
+# MODULE INTEGRATION HELPERS
 # ==============================================================================
 
-output "computed_values" {
-  description = "환경별 계산된 값들"
+# For VPC Module Integration
+output "vpc_integration" {
+  description = "VPC 모듈 통합을 위한 설정"
   value = {
-    # 인스턴스 타입 추천
-    recommended_instance_type = local.current_env_config.instance_types.medium
+    # Network configuration
+    vpc_cidr               = local.current_network_config.vpc_cidr
+    availability_zones     = local.current_network_config.availability_zones
+    public_subnet_cidrs    = local.current_network_config.public_subnet_cidrs
+    private_subnet_cidrs   = local.current_network_config.private_subnet_cidrs
+    database_subnet_cidrs  = local.current_network_config.database_subnet_cidrs
+    enable_nat_gateway     = local.current_network_config.enable_nat_gateway
+    single_nat_gateway     = local.current_network_config.single_nat_gateway
     
-    # 가용성 영역 목록 (실제 AZ 기준)
-    available_azs = slice(data.aws_availability_zones.available.names, 0, 
-                         coalesce(var.override_network_config.availability_zones, 
-                                local.current_network_config.availability_zones))
+    # Security settings
+    enable_dns_hostnames   = local.current_env_config.security.vpc_enable_dns_hostnames
+    enable_dns_support     = local.current_env_config.security.vpc_enable_dns_support
+    enable_flow_logs       = local.current_env_config.security.enable_flow_logs
     
-    # 환경별 특성
-    environment_characteristics = {
-      is_production     = var.environment == "prod"
-      is_development    = var.environment == "dev"
-      is_staging       = var.environment == "staging"
-      requires_ha      = contains(["staging", "prod"], var.environment)
-      cost_sensitive   = var.environment == "dev"
-      security_strict  = contains(["staging", "prod"], var.environment)
-    }
+    # Common settings
+    project_name = var.project_name
+    environment  = var.environment
+    common_tags  = local.final_tags
+  }
+}
+
+# For RDS Module Integration
+output "rds_integration" {
+  description = "RDS 모듈 통합을 위한 설정"
+  value = {
+    # Database configuration
+    instance_class           = local.current_env_config.database.instance_class
+    allocated_storage       = local.current_env_config.database.allocated_storage
+    backup_retention_period = local.current_env_config.database.backup_retention_period
+    multi_az               = local.current_env_config.database.multi_az
+    deletion_protection    = local.current_env_config.database.deletion_protection
+    skip_final_snapshot    = local.current_env_config.database.skip_final_snapshot
     
-    # 리소스 제한
-    resource_limits = {
-      max_instances    = local.current_env_config.cost_optimization.auto_scaling_max_size
-      min_instances    = local.current_env_config.cost_optimization.auto_scaling_min_size
-      backup_retention = local.current_env_config.database.backup_retention_period
-      log_retention    = local.current_env_config.monitoring.log_retention_days
-    }
+    # Security settings
+    encryption_enabled = local.current_env_config.security.enable_encryption
+    kms_key_id        = var.create_shared_kms_key ? aws_kms_key.env_key[0].arn : null
+    
+    # Monitoring
+    monitoring_interval = local.current_env_config.monitoring.detailed_monitoring_enabled ? 60 : 0
+    log_retention_days = local.current_env_config.monitoring.log_retention_days
+    create_alarms     = local.current_env_config.monitoring.create_dashboards
+    
+    # Common settings
+    project_name = var.project_name
+    environment  = var.environment
+    common_tags  = local.final_tags
+  }
+}
+
+# For ECS Module Integration
+output "ecs_integration" {
+  description = "ECS 모듈 통합을 위한 설정"
+  value = {
+    # ECS configuration
+    cpu                = local.current_service_config.ecs.cpu
+    memory             = local.current_service_config.ecs.memory
+    desired_count      = local.current_service_config.ecs.desired_count
+    min_capacity       = local.current_service_config.ecs.min_capacity
+    max_capacity       = local.current_service_config.ecs.max_capacity
+    enable_auto_scaling = local.current_service_config.ecs.enable_auto_scaling
+    
+    # Instance configuration
+    instance_types = local.current_env_config.instance_types
+    
+    # Monitoring
+    detailed_monitoring = local.current_env_config.monitoring.detailed_monitoring_enabled
+    log_retention_days = local.current_env_config.monitoring.log_retention_days
+    
+    # Security
+    encryption_enabled = local.current_env_config.security.enable_encryption
+    kms_key_id        = var.create_shared_kms_key ? aws_kms_key.env_key[0].arn : null
+    
+    # Common settings
+    project_name = var.project_name
+    environment  = var.environment
+    common_tags  = local.final_tags
+  }
+}
+
+# For Lambda Module Integration
+output "lambda_integration" {
+  description = "Lambda 모듈 통합을 위한 설정"
+  value = {
+    # Lambda configuration
+    timeout                = local.current_service_config.lambda.timeout
+    memory_size           = local.current_service_config.lambda.memory_size
+    reserved_concurrency  = local.current_service_config.lambda.reserved_concurrency
+    dead_letter_queue    = local.current_service_config.lambda.dead_letter_queue
+    enable_xray_tracing  = local.current_service_config.lambda.enable_xray_tracing
+    
+    # Monitoring
+    log_retention_days = local.current_env_config.monitoring.log_retention_days
+    
+    # Security
+    kms_key_id = var.create_shared_kms_key ? aws_kms_key.env_key[0].arn : null
+    
+    # Common settings
+    project_name = var.project_name
+    environment  = var.environment
+    common_tags  = local.final_tags
+  }
+}
+
+# For ElastiCache Module Integration
+output "elasticache_integration" {
+  description = "ElastiCache 모듈 통합을 위한 설정"
+  value = {
+    # Cache configuration
+    node_type                 = local.current_service_config.cache.node_type
+    num_cache_nodes          = local.current_service_config.cache.num_cache_nodes
+    parameter_group_family   = local.current_service_config.cache.parameter_group_family
+    at_rest_encryption_enabled = local.current_service_config.cache.at_rest_encryption_enabled
+    transit_encryption_enabled = local.current_service_config.cache.transit_encryption_enabled
+    
+    # Security
+    kms_key_id = var.create_shared_kms_key ? aws_kms_key.env_key[0].arn : null
+    
+    # Monitoring
+    log_retention_days = local.current_env_config.monitoring.log_retention_days
+    
+    # Common settings
+    project_name = var.project_name
+    environment  = var.environment
+    common_tags  = local.final_tags
+  }
+}
+
+# For KMS Module Integration
+output "kms_integration" {
+  description = "KMS 모듈 통합을 위한 설정"
+  value = {
+    # Key configuration
+    enable_key_rotation     = true
+    deletion_window_in_days = var.environment == "prod" ? 30 : 7
+    multi_region           = var.environment == "prod" ? true : false
+    
+    # Monitoring
+    enable_logging         = local.current_env_config.monitoring.create_dashboards
+    log_retention_in_days  = local.current_env_config.monitoring.log_retention_days
+    create_cloudwatch_alarms = local.current_env_config.monitoring.create_dashboards
+    alarm_actions          = var.create_shared_sns_topic ? [aws_sns_topic.env_notifications[0].arn] : []
+    
+    # Common settings
+    project_name = var.project_name
+    environment  = var.environment
+    common_tags  = local.final_tags
+  }
+}
+
+# For EventBridge Module Integration
+output "eventbridge_integration" {
+  description = "EventBridge 모듈 통합을 위한 설정"
+  value = {
+    # EventBridge configuration
+    kms_key_id = var.create_shared_kms_key ? aws_kms_key.env_key[0].arn : null
+    
+    # Monitoring
+    create_cloudwatch_alarms = local.current_env_config.monitoring.create_dashboards
+    alarm_actions           = var.create_shared_sns_topic ? [aws_sns_topic.env_notifications[0].arn] : []
+    
+    # Common settings
+    project_name = var.project_name
+    environment  = var.environment
+    common_tags  = local.final_tags
+  }
+}
+
+# For Monitoring Integration
+output "monitoring_integration" {
+  description = "모니터링 통합을 위한 설정"
+  value = {
+    # Monitoring settings
+    detailed_monitoring_enabled = local.current_env_config.monitoring.detailed_monitoring_enabled
+    log_retention_days         = local.current_env_config.monitoring.log_retention_days
+    create_dashboards          = local.current_env_config.monitoring.create_dashboards
+    alarm_evaluation_periods   = local.current_env_config.monitoring.alarm_evaluation_periods
+    alarm_threshold_multiplier = local.current_env_config.monitoring.alarm_threshold_multiplier
+    
+    # Notification settings
+    notification_topic_arn = var.create_shared_sns_topic ? aws_sns_topic.env_notifications[0].arn : null
+    
+    # Security
+    kms_key_id = var.create_shared_kms_key ? aws_kms_key.env_key[0].arn : null
+    
+    # Common settings
+    project_name = var.project_name
+    environment  = var.environment
+    common_tags  = local.final_tags
   }
 }
 
 # ==============================================================================
-# INTEGRATION HELPERS
+# CROSS-MODULE RESOURCE REFERENCES
 # ==============================================================================
 
-output "integration_config" {
-  description = "다른 모듈과의 통합을 위한 설정"
+# Resource ARNs for cross-module references
+output "resource_references" {
+  description = "다른 모듈에서 참조할 수 있는 리소스 ARN"
   value = {
-    # 모듈 호출 시 자주 사용되는 변수 조합
-    module_common_vars = {
-      project_name    = var.project_name
-      environment     = var.environment
-      common_tags     = local.final_tags
-      kms_key_id      = var.create_shared_kms_key ? aws_kms_key.env_key[0].arn : null
-      sns_topic_arn   = var.create_shared_sns_topic ? aws_sns_topic.env_notifications[0].arn : null
-    }
+    shared_kms_key_arn = var.create_shared_kms_key ? aws_kms_key.env_key[0].arn : null
+    shared_kms_key_id  = var.create_shared_kms_key ? aws_kms_key.env_key[0].id : null
+    shared_kms_alias   = var.create_shared_kms_key ? aws_kms_alias.env_key_alias[0].name : null
     
-    # 모니터링 통합
-    monitoring_integration = {
-      enable_detailed_monitoring = local.current_env_config.monitoring.detailed_monitoring_enabled
-      log_retention_days         = local.current_env_config.monitoring.log_retention_days
-      create_dashboards          = local.current_env_config.monitoring.create_dashboards
-      alarm_actions             = var.create_shared_sns_topic ? [aws_sns_topic.env_notifications[0].arn] : []
-    }
+    notification_topic_arn = var.create_shared_sns_topic ? aws_sns_topic.env_notifications[0].arn : null
     
-    # 보안 통합
-    security_integration = {
-      enable_encryption = local.current_env_config.security.enable_encryption
-      force_ssl        = local.current_env_config.security.force_ssl
-      kms_key_arn      = var.create_shared_kms_key ? aws_kms_key.env_key[0].arn : null
-    }
+    # AWS context
+    account_id = data.aws_caller_identity.current.account_id
+    region     = data.aws_region.current.name
   }
 }
 
-# ==============================================================================
-# VALIDATION OUTPUTS
-# ==============================================================================
-
-output "configuration_summary" {
-  description = "설정 요약 (검증 및 디버깅용)"
+# Environment Summary
+output "environment_summary" {
+  description = "환경 구성 요약 정보"
   value = {
-    environment_type = var.environment
-    total_azs       = length(slice(data.aws_availability_zones.available.names, 0, 
-                                  coalesce(var.override_network_config.availability_zones, 
-                                          local.current_network_config.availability_zones)))
+    environment    = var.environment
+    project_name   = var.project_name
+    account_id     = data.aws_caller_identity.current.account_id
+    region         = data.aws_region.current.name
     
-    overrides_applied = {
-      instance_types = length(var.override_instance_types) > 0
-      database      = length(var.override_database_config) > 0
-      monitoring    = length(var.override_monitoring_config) > 0
-      security      = length(var.override_security_config) > 0
-      network       = length(var.override_network_config) > 0
-      services      = length(var.override_service_config) > 0
-    }
+    # Capabilities enabled
+    shared_kms_enabled = var.create_shared_kms_key
+    shared_sns_enabled = var.create_shared_sns_topic
     
-    shared_resources = {
-      kms_key_created   = var.create_shared_kms_key
-      sns_topic_created = var.create_shared_sns_topic
-    }
+    # Environment characteristics
+    is_production       = var.environment == "prod"
+    multi_az_enabled    = local.current_env_config.database.multi_az
+    encryption_enabled  = local.current_env_config.security.enable_encryption
+    monitoring_enabled  = local.current_env_config.monitoring.create_dashboards
     
-    compliance_requirements = var.compliance_requirements
-    feature_flags = {
-      cost_optimization    = var.enable_cost_optimization
-      advanced_monitoring  = var.enable_advanced_monitoring
-      disaster_recovery    = var.enable_disaster_recovery
-    }
+    # Resource sizing tier
+    size_tier = var.environment == "dev" ? "small" : var.environment == "staging" ? "medium" : "large"
   }
 }

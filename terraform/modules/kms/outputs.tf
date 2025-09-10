@@ -1,3 +1,8 @@
+# ==============================================================================
+# KMS MODULE OUTPUTS - Standardized Format
+# ==============================================================================
+
+# Core KMS Resources
 output "key_id" {
   description = "KMS 키 ID"
   value       = aws_kms_key.main.key_id
@@ -9,7 +14,7 @@ output "key_arn" {
 }
 
 output "alias_name" {
-  description = "KMS 키 별칭"
+  description = "KMS 키 별칭 이름"
   value       = aws_kms_alias.main.name
 }
 
@@ -18,6 +23,7 @@ output "alias_arn" {
   value       = aws_kms_alias.main.arn
 }
 
+# Configuration Information
 output "key_usage" {
   description = "키 사용 목적"
   value       = aws_kms_key.main.key_usage
@@ -38,51 +44,102 @@ output "multi_region" {
   value       = aws_kms_key.main.multi_region
 }
 
-output "deletion_window_in_days" {
-  description = "키 삭제 대기 기간"
-  value       = aws_kms_key.main.deletion_window_in_days
-}
-
-output "policy" {
-  description = "키 정책"
+# Policy Information
+output "key_policy" {
+  description = "KMS 키 정책 JSON"
   value       = aws_kms_key.main.policy
-}
-
-output "grant_ids" {
-  description = "KMS 권한 부여 ID 리스트"
-  value       = aws_kms_grant.main[*].grant_id
-}
-
-output "grant_tokens" {
-  description = "KMS 권한 부여 토큰 리스트"
-  value       = aws_kms_grant.main[*].grant_token
   sensitive   = true
 }
 
-output "log_group_name" {
-  description = "CloudWatch 로그 그룹 이름"
-  value       = var.enable_logging ? aws_cloudwatch_log_group.kms_usage[0].name : null
+# Grant Information
+output "grants" {
+  description = "생성된 KMS 권한 부여 정보"
+  value = {
+    for idx, grant in aws_kms_grant.main : idx => {
+      name              = grant.name
+      key_id           = grant.key_id
+      grantee_principal = grant.grantee_principal
+      operations       = grant.operations
+      grant_id         = grant.grant_id
+      grant_token      = grant.grant_token
+    }
+  }
+  sensitive = true
 }
 
-output "log_group_arn" {
-  description = "CloudWatch 로그 그룹 ARN"
-  value       = var.enable_logging ? aws_cloudwatch_log_group.kms_usage[0].arn : null
+# Monitoring Resources
+output "cloudwatch_log_group" {
+  description = "CloudWatch 로그 그룹 정보"
+  value = var.enable_logging ? {
+    name              = aws_cloudwatch_log_group.kms_usage[0].name
+    arn              = aws_cloudwatch_log_group.kms_usage[0].arn
+    retention_in_days = aws_cloudwatch_log_group.kms_usage[0].retention_in_days
+  } : null
 }
 
-output "dashboard_url" {
-  description = "CloudWatch 대시보드 URL"
-  value = var.create_dashboard ? "https://console.aws.amazon.com/cloudwatch/home?region=${data.aws_region.current.name}#dashboards:name=${aws_cloudwatch_dashboard.kms[0].dashboard_name}" : null
+output "cloudwatch_alarms" {
+  description = "생성된 CloudWatch 알람 정보"
+  value = var.create_cloudwatch_alarms ? {
+    usage_alarm = {
+      name = aws_cloudwatch_metric_alarm.kms_key_usage[0].alarm_name
+      arn  = aws_cloudwatch_metric_alarm.kms_key_usage[0].arn
+    }
+  } : {}
 }
 
-# Frequently used outputs for other modules
-output "key_id_for_encryption" {
-  description = "암호화에 사용할 KMS 키 ID (별칭 형태)"
-  value       = aws_kms_alias.main.name
+output "dashboard_name" {
+  description = "CloudWatch 대시보드 이름"
+  value       = var.create_dashboard ? aws_cloudwatch_dashboard.kms[0].dashboard_name : null
 }
 
-output "key_arn_for_iam" {
-  description = "IAM 정책에서 사용할 KMS 키 ARN"
-  value       = aws_kms_key.main.arn
+# Resource Summary for Integration
+output "resource_summary" {
+  description = "KMS 모듈 리소스 요약"
+  value = {
+    key_id           = aws_kms_key.main.key_id
+    key_arn          = aws_kms_key.main.arn
+    alias_name       = aws_kms_alias.main.name
+    alias_arn        = aws_kms_alias.main.arn
+    rotation_enabled = aws_kms_key.main.key_rotation_enabled
+    multi_region     = aws_kms_key.main.multi_region
+    grants_count     = length(aws_kms_grant.main)
+    monitoring_enabled = var.create_cloudwatch_alarms
+    logging_enabled    = var.enable_logging
+    dashboard_enabled  = var.create_dashboard
+    
+    # Environment context
+    project_name = var.project_name
+    environment  = var.environment
+    key_name     = var.key_name
+  }
 }
 
-# Data source already defined in main.tf
+# Standard Module Metadata
+output "module_metadata" {
+  description = "모듈 메타데이터 (표준화된 형식)"
+  value = {
+    module_name    = "kms"
+    module_version = "1.0.0"
+    resource_count = 2 + length(var.grants) + (var.enable_logging ? 1 : 0) + (var.create_cloudwatch_alarms ? 1 : 0) + (var.create_dashboard ? 1 : 0)
+    
+    capabilities = [
+      "key_management",
+      "access_control",
+      "policy_management",
+      "grant_management",
+      var.enable_logging ? "logging" : null,
+      var.create_cloudwatch_alarms ? "monitoring" : null,
+      var.create_dashboard ? "dashboard" : null,
+      var.multi_region ? "multi_region" : null
+    ]
+    
+    integration_points = {
+      s3_encryption      = aws_kms_key.main.arn
+      dynamodb_encryption = aws_kms_key.main.arn
+      lambda_encryption   = aws_kms_key.main.arn
+      sns_encryption     = aws_kms_key.main.arn
+      sqs_encryption     = aws_kms_key.main.arn
+      rds_encryption     = aws_kms_key.main.arn
+    }
+  }
+}
