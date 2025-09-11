@@ -1,222 +1,174 @@
-# 🏷️ StackKit 표준 변수명 가이드
+# StackKit 변수명 표준
 
-Terraform 프로젝트 전체에서 일관된 변수명 사용을 위한 표준 가이드입니다.
+## 기본 원칙
 
----
+1. **snake_case** 사용 (Terraform 표준)
+2. **prefix 기반 그룹핑** (service_name 형태)
+3. **명확하고 일관된 naming**
+4. **타입 명시적 표현**
 
-## 🎯 핵심 원칙
+## 필수 공통 변수
 
-### 1. 일관성 (Consistency)
-- **하나의 개념은 하나의 변수명**으로 통일
-- 프로젝트 전체에서 동일한 이름 사용
-- 약어보다는 명확한 단어 선호
-
-### 2. 명확성 (Clarity)
-- 변수의 목적이 이름으로 명확히 드러남
-- 타입과 용도를 변수명에서 유추 가능
-- 혼동될 수 있는 유사한 이름 지양
-
-### 3. 확장성 (Scalability)
-- 새로운 환경이나 서비스 추가 시에도 일관성 유지
-- Hierarchical naming으로 구조화
-- Future-proof naming
-
----
-
-## 📋 표준 변수명 목록
-
-### 🌍 기본 환경 변수
-
-| 변수명 | 타입 | 설명 | 예시 값 |
-|--------|------|------|---------|
-| `org_name` | `string` | **조직/회사 이름** | `connectly`, `mycompany` |
-| `environment` | `string` | **환경 구분자** | `dev`, `staging`, `prod` |
-| `aws_region` | `string` | **AWS 리전** (region ❌) | `ap-northeast-2`, `us-east-1` |
-| `stack_name` | `string` | **스택 식별자** | `connectly-atlantis-prod` |
-
-### 🔐 보안 및 인증
-
-| 변수명 | 타입 | 설명 | 예시 값 |
-|--------|------|------|---------|
-| `secret_name` | `string` | **Secrets Manager 시크릿 이름** | `connectly-atlantis-prod` |
-| `github_token` | `string` | **GitHub Personal Access Token** | `ghp_xxxxxxxxxxxx` (sensitive) |
-| `webhook_secret` | `string` | **GitHub 웹훅 시크릿** | auto-generated (sensitive) |
-
-### 🌐 네트워킹
-
-| 변수명 | 타입 | 설명 | 예시 값 |
-|--------|------|------|---------|
-| `custom_domain` | `string` | **사용자 정의 도메인** | `atlantis.company.com` |
-| `certificate_arn` | `string` | **SSL 인증서 ARN** | `arn:aws:acm:...` |
-| `existing_vpc_id` | `string` | **기존 VPC ID (재사용 시)** | `vpc-0f162b9e588276e09` |
-| `existing_public_subnet_ids` | `list(string)` | **기존 퍼블릭 서브넷 ID 목록** | `["subnet-abc123", "subnet-def456"]` |
-| `existing_private_subnet_ids` | `list(string)` | **기존 프라이빗 서브넷 ID 목록** | `["subnet-ghi789", "subnet-jkl012"]` |
-
-### ⚙️ 인프라 옵션
-
-| 변수명 | 타입 | 설명 | 기본값 |
-|--------|------|------|--------|
-| `use_existing_vpc` | `bool` | **기존 VPC 사용 여부** | `false` |
-| `use_existing_ecs_cluster` | `bool` | **기존 ECS 클러스터 사용 여부** | `false` |
-| `use_existing_alb` | `bool` | **기존 ALB 사용 여부** | `false` |
-
-### 🐙 Git 관련
-
-| 변수명 | 타입 | 설명 | 예시 값 |
-|--------|------|------|---------|
-| `git_username` | `string` | **Git 사용자명** | `connectly-atlantis` |
-| `git_hostname` | `string` | **Git 호스트명** | `github.com` |
-| `repo_allowlist` | `list(string)` | **허용된 저장소 패턴 목록** | `["github.com/myorg/*"]` |
-
-### 💰 비용 관리
-
-| 변수명 | 타입 | 설명 | 예시 값 |
-|--------|------|------|---------|
-| `infracost_api_key` | `string` | **Infracost API 키 (선택사항)** | `ico-xxx...` (sensitive) |
-
----
-
-## ❌ 사용하지 말아야 할 변수명
-
-### 🔴 금지된 변수명
-
-| ❌ 사용 금지 | ✅ 대신 사용 | 이유 |
-|------------|-----------|-----|
-| `region` | `aws_region` | **AWS 리전임을 명확히 표시** |
-| `env` | `environment` | **약어보다 명확한 단어** |
-| `org` | `org_name` | **조직의 이름임을 명확히** |
-| `domain` | `custom_domain` | **사용자 정의 도메인임을 명시** |
-| `vpc_id` | `existing_vpc_id` | **기존 리소스 재사용임을 명시** |
-| `cluster_name` | `existing_ecs_cluster_name` | **기존 ECS 클러스터임을 명시** |
-
-### 🟡 주의해야 할 패턴
-
-| ⚠️ 주의 | 문제점 | 권장사항 |
-|--------|-------|---------|
-| `*_arn` vs `*_id` | **혼동 가능성** | ARN인지 ID인지 명확히 구분 |
-| `enable_*` vs `use_*` | **의미 차이** | enable: 기능 활성화, use: 기존 리소스 사용 |
-| `bucket` vs `bucket_name` | **타입 불명확** | `bucket_name`으로 문자열임을 명시 |
-
----
-
-## 📂 파일별 변수명 표준
-
-### terraform.tfvars
+### 프로젝트 메타데이터
 ```hcl
-# ✅ 표준 순서
-# 1. 기본 환경 변수
-org_name     = "connectly"
-environment  = "prod"
-aws_region   = "ap-northeast-2"
-stack_name   = "connectly-atlantis-prod"
-
-# 2. 보안 설정
-secret_name = "connectly-atlantis-prod"
-
-# 3. 도메인 설정
-custom_domain   = ""
-certificate_arn = ""
-
-# 4. GitHub 설정
-git_username    = "connectly-atlantis"
-repo_allowlist  = [
-    "github.com/myorg/*",
-]
-
-# 5. 인프라 옵션
-use_existing_vpc         = true
-use_existing_ecs_cluster = false
-use_existing_alb         = false
-
-# 6. VPC 설정 (기존 VPC 사용 시)
-existing_vpc_id = "vpc-0f162b9e588276e09"
-existing_public_subnet_ids = ["subnet-abc123", "subnet-def456"]
-existing_private_subnet_ids = ["subnet-ghi789", "subnet-jkl012"]
-
-# 7. 추가 옵션
-infracost_api_key = ""
+project_name    = string  # 프로젝트 이름
+team           = string  # 팀 이름  
+organization   = string  # 조직 이름
+environment    = string  # 환경 (dev/staging/prod)
+cost_center    = string  # 비용 센터
+owner_email    = string  # 소유자 이메일
 ```
 
-### variables.tf
+### AWS 기본 설정
 ```hcl
-# ✅ 변수 선언 표준
-variable "aws_region" {
+aws_region     = string  # AWS 리전
+tags          = map(string)  # 공통 태그 (지역화)
+```
+
+## 서비스별 표준 변수명
+
+### Networking
+```hcl
+# VPC
+vpc_cidr                    = string       # VPC CIDR
+use_existing_vpc           = bool         # 기존 VPC 사용 여부
+existing_vpc_id            = string       # 기존 VPC ID
+existing_public_subnet_ids = list(string) # 기존 퍼블릭 서브넷 IDs
+existing_private_subnet_ids = list(string) # 기존 프라이빗 서브넷 IDs
+
+# NAT Gateway
+enable_nat_gateway = bool # NAT Gateway 생성 여부
+```
+
+### ECS
+```hcl
+# Cluster
+enable_container_insights = bool   # Container Insights 활성화
+
+# Task Definition
+ecs_task_cpu    = string  # CPU 단위 (256, 512, 1024...)
+ecs_task_memory = string  # 메모리 MB (512, 1024, 2048...)
+task_image      = string  # 컨테이너 이미지
+
+# Service
+ecs_min_capacity = number # 최소 태스크 수
+ecs_max_capacity = number # 최대 태스크 수
+desired_count    = number # 희망 태스크 수
+
+# Auto Scaling
+enable_autoscaling         = bool   # 오토스케일링 활성화
+target_cpu_utilization    = number # CPU 사용률 임계값
+target_memory_utilization = number # 메모리 사용률 임계값
+```
+
+### Load Balancer
+```hcl
+# ALB
+enable_deletion_protection = bool         # 삭제 보호
+certificate_arn           = string       # ACM 인증서 ARN
+additional_certificate_arns = list(string) # 추가 인증서들
+ssl_policy                = string       # SSL 정책
+
+# Target Group
+health_check_path     = string # 헬스체크 경로
+health_check_interval = number # 헬스체크 간격
+```
+
+### Security
+```hcl
+# Security Groups (자동 생성되는 ID들은 변수로 노출하지 않음)
+allowed_cidr_blocks = list(string) # 허용할 CIDR 블록들
+
+# Secrets
+secret_recovery_window_days = number # 시크릿 복구 기간
+```
+
+### Storage
+```hcl
+# EFS
+enable_efs              = bool   # EFS 활성화
+efs_performance_mode    = string # EFS 성능 모드
+efs_throughput_mode     = string # EFS 처리량 모드
+efs_lifecycle_policy    = string # EFS 라이프사이클 정책
+
+# S3 (Terraform State)
+create_terraform_state_bucket = bool # Terraform State S3 버킷 생성
+create_terraform_lock_table   = bool # Terraform Lock DynamoDB 테이블 생성
+```
+
+### Logging
+```hcl
+log_retention_days = number # CloudWatch 로그 보존 기간
+```
+
+### 서비스 특화 변수 (Atlantis)
+```hcl
+# Atlantis 설정
+atlantis_host               = string # Atlantis 호스트명
+atlantis_port               = number # Atlantis 포트 (기본: 4141)
+atlantis_image              = string # Atlantis 이미지
+atlantis_repo_allowlist     = string # 허용 레포지토리 패턴
+atlantis_repo_config        = string # atlantis.yaml 경로
+atlantis_github_user        = string # GitHub 사용자명
+hide_prev_plan_comments     = bool   # 이전 plan 댓글 숨기기
+terraform_version           = string # Terraform 버전
+```
+
+## 금지된 변수명 패턴
+
+### ❌ 잘못된 예시
+```hcl
+vpc_id          # 리소스 ID는 변수가 아닌 data source나 local
+subnet_ids      # 복수형이지만 list 타입 명시 없음
+tags            # 너무 일반적, local.common_tags 사용
+alb_arn         # 리소스 ARN은 output
+security_group_id # 리소스 ID는 output
+```
+
+### ✅ 올바른 예시
+```hcl
+existing_vpc_id            # 기존 리소스 참조는 명시적
+existing_subnet_ids        # 기존 리소스 + 복수형
+use_existing_vpc          # boolean은 enable_/use_ prefix
+enable_container_insights # boolean은 enable_ prefix
+atlantis_github_user      # 서비스명 prefix
+```
+
+## 변수 그룹 분류
+
+1. **메타데이터**: project_name, team, organization, environment
+2. **인프라 설정**: aws_region, vpc_cidr, subnet configurations
+3. **서비스 설정**: ECS, ALB, Security 관련
+4. **기능 토글**: enable_*, use_*, create_* (boolean)
+5. **서비스별 특화**: atlantis_*, 기타 애플리케이션별
+
+## 변수 정의 템플릿
+
+```hcl
+variable "project_name" {
+  description = "Name of the project"
   type        = string
-  description = "AWS region for deployment"
-  # default 값은 가급적 지양, terraform.tfvars 사용 권장
+  
+  validation {
+    condition     = can(regex("^[a-z0-9-]+$", var.project_name))
+    error_message = "Project name must contain only lowercase letters, numbers, and hyphens."
+  }
 }
 
-variable "environment" { 
+variable "enable_container_insights" {
+  description = "Enable CloudWatch Container Insights for ECS cluster"
+  type        = bool
+  default     = true
+}
+
+variable "ecs_task_cpu" {
+  description = "CPU units for ECS task (256, 512, 1024, 2048, 4096)"
   type        = string
-  description = "Environment name (dev/staging/prod)"
+  default     = "512"
+  
   validation {
-    condition     = contains(["dev", "staging", "prod"], var.environment)
-    error_message = "Environment must be dev, staging, or prod."
+    condition     = contains(["256", "512", "1024", "2048", "4096"], var.ecs_task_cpu)
+    error_message = "ECS task CPU must be one of: 256, 512, 1024, 2048, 4096."
   }
 }
 ```
-
-### versions.tf
-```hcl
-# ✅ Provider 설정 표준
-provider "aws" {
-  region = var.aws_region  # ❌ var.region 사용 금지
-}
-```
-
----
-
-## 🔄 마이그레이션 가이드
-
-### 기존 프로젝트에서 신규 표준으로 전환
-
-1. **변수명 일괄 변경**
-   ```bash
-   # region을 aws_region으로 전체 변경
-   find . -name "*.tf" -o -name "*.tfvars" | xargs sed -i 's/var\.region/var.aws_region/g'
-   find . -name "*.tf" -o -name "*.tfvars" | xargs sed -i 's/region\s*=/aws_region =/g'
-   ```
-
-2. **검증**
-   ```bash
-   # 변경 후 terraform plan으로 검증
-   terraform plan
-   
-   # 추가 변경 사항 확인
-   grep -r "region\s*=" . --include="*.tf" --include="*.tfvars"
-   ```
-
-3. **점진적 적용**
-   - 개발 환경부터 적용
-   - 스테이징 검증 후 프로덕션 적용
-   - 각 단계별 동작 확인
-
----
-
-## 🎯 핵심 요약
-
-### ✅ DO (해야 할 것)
-- **`aws_region`** 사용 (region ❌)
-- **`org_name`** 사용 (org ❌)
-- **`environment`** 사용 (env ❌)
-- **`existing_*`** 접두어로 기존 리소스 표시
-- **일관된 naming convention** 유지
-
-### ❌ DON'T (하지 말 것)
-- 약어나 축약형 변수명
-- 같은 개념에 다른 변수명 사용
-- 타입이나 용도가 모호한 변수명
-- 혼동될 수 있는 유사한 변수명
-
----
-
-## 📞 문의 및 제안
-
-변수명 표준에 대한 문의나 개선 제안이 있으시면:
-- **GitHub Issues**: https://github.com/your-org/stackkit/issues
-- **문서 업데이트**: 이 파일을 직접 수정하여 PR 제출
-
----
-
-**마지막 업데이트**: 2024년 기준  
-**적용 범위**: StackKit 전체 프로젝트

@@ -1,0 +1,76 @@
+# Example terraform.tfvars file for ECS addon
+# Copy this file to terraform.tfvars and customize for your environment
+
+# Core Configuration
+project_name = "my-project"
+environment  = "dev"  # dev, staging, or prod
+service_name = "api"
+service_type = "api"  # api or worker
+
+# AWS Configuration
+aws_region = "ap-northeast-2"
+
+# Container Configuration
+container_image = "123456789012.dkr.ecr.ap-northeast-2.amazonaws.com/my-app:latest"
+container_port  = 8080
+
+# Shared Infrastructure
+use_shared_infrastructure = true
+shared_state_bucket      = "my-terraform-state-bucket"
+shared_state_key         = "shared/terraform.tfstate"
+
+# ALB Configuration (for API services)
+enable_alb = true
+alb_listener_rule_priority = 100
+alb_listener_rule_conditions = [
+  {
+    path_pattern = {
+      values = ["/api/*"]
+    }
+  }
+]
+
+# Environment Variables
+environment_variables = {
+  NODE_ENV  = "development"
+  PORT      = "8080"
+  LOG_LEVEL = "info"
+}
+
+# Secrets (use Parameter Store or Secrets Manager ARNs)
+secrets = {
+  DATABASE_URL = "arn:aws:ssm:ap-northeast-2:123456789012:parameter/my-app/dev/database-url"
+  API_KEY      = "arn:aws:secretsmanager:ap-northeast-2:123456789012:secret:my-app/dev/api-key"
+}
+
+# Health Check Configuration
+health_check_command = "curl -f http://localhost:8080/health || exit 1"
+alb_health_check_path = "/health"
+
+# Auto Scaling
+enable_autoscaling = true
+autoscaling_cpu_target = 70
+autoscaling_memory_target = 80
+
+# Logging
+log_retention_days = 7
+
+# IAM Configuration
+s3_bucket_arns = [
+  "arn:aws:s3:::my-app-uploads"
+]
+
+task_role_managed_policies = [
+  "arn:aws:iam::aws:policy/AmazonSQSReadOnlyAccess"
+]
+
+# Development/Debugging
+enable_execute_command = true  # Set to false for production
+
+# Tags
+common_tags = {
+  Project     = "my-project"
+  Environment = "dev"
+  Team        = "backend"
+  Service     = "api"
+}

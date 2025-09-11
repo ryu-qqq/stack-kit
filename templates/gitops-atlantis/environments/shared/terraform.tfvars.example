@@ -1,0 +1,105 @@
+# =======================================
+# Terraform Variables for Atlantis GitOps
+# =======================================
+# Copy this file to terraform.tfvars and update with your values
+
+# Basic Configuration
+environment  = "shared"
+project_name = "atlantis"
+aws_region   = "ap-northeast-2"
+owner        = "DevOps"
+
+# Option 1: Use connectly-shared-infrastructure
+use_shared_infrastructure = true
+shared_state_bucket      = "your-terraform-state-bucket"
+shared_state_key         = "connectly-shared-infrastructure/terraform.tfstate"
+
+# Option 2: Use existing VPC (if not using shared infrastructure)
+# use_existing_vpc            = true
+# existing_vpc_id             = "vpc-xxxxxxxxx"
+# existing_public_subnet_ids  = ["subnet-xxx", "subnet-yyy"]
+# existing_private_subnet_ids = ["subnet-aaa", "subnet-bbb"]
+
+# Option 3: Create new VPC (if neither of the above)
+# vpc_cidr           = "10.0.0.0/16"
+# enable_nat_gateway = true
+
+# Atlantis Configuration
+atlantis_url          = "https://atlantis.yourdomain.com"
+github_user           = "your-github-username"
+github_token          = "ghp_xxxxxxxxxxxxxxxxxxxx"  # Will be stored in Secrets Manager
+github_webhook_secret = "your-webhook-secret"
+github_repo_allowlist = "github.com/your-org/*"
+terraform_version     = "1.7.5"
+
+# Optional: Terraform Cloud/Enterprise
+# tfe_token = "your-tfe-token"
+
+# ECS Configuration
+task_cpu                  = "512"   # 0.5 vCPU
+task_memory              = "1024"   # 1 GB
+desired_count            = 1
+enable_container_insights = true
+log_retention_days       = 30
+
+# Auto Scaling (optional)
+enable_autoscaling = false
+min_capacity      = 1
+max_capacity      = 3
+cpu_threshold     = 70
+memory_threshold  = 70
+
+# Load Balancer Configuration
+enable_deletion_protection = false
+certificate_arn           = "arn:aws:acm:ap-northeast-2:xxxx:certificate/yyyy"  # Required for HTTPS
+# additional_certificate_arns = []
+ssl_policy = "ELBSecurityPolicy-TLS-1-2-2017-01"
+
+# Storage Configuration
+enable_efs                  = true
+efs_performance_mode        = "generalPurpose"
+efs_throughput_mode        = "bursting"
+enable_efs_lifecycle_policy = true
+secret_recovery_window_days = 7
+
+# Terraform State Backend (if not using existing)
+create_terraform_state_bucket    = false
+existing_terraform_state_bucket  = "your-terraform-state-bucket"
+create_terraform_lock_table      = false
+existing_terraform_lock_table    = "terraform-state-lock"
+
+# Route53 Configuration (optional)
+create_route53_record = true
+route53_zone_id      = "Z1234567890ABC"
+atlantis_hostname    = "atlantis.yourdomain.com"
+
+# Atlantis Repository Configuration
+atlantis_repo_config = {
+  repos = [
+    {
+      id                            = "/.*./"
+      allowed_overrides             = ["workflow", "apply_requirements"]
+      allow_custom_workflows        = true
+      delete_source_branch_on_merge = true
+      repo_locking                  = true
+      apply_requirements           = ["approved", "mergeable"]
+      workflow_name                = "default"
+    }
+  ]
+  workflows = {
+    default = {
+      name = "default"
+      plan = {
+        steps = [
+          "init",
+          "plan"
+        ]
+      }
+      apply = {
+        steps = [
+          "apply"
+        ]
+      }
+    }
+  }
+}

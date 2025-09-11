@@ -1,0 +1,134 @@
+name: Terraform CI
+
+on:
+  pull_request:
+    branches:
+      - main
+      - master
+    paths:
+      - '**.tf'
+      - '**.tfvars'
+      - '.github/workflows/terraform-ci.yml'
+
+env:
+  TF_VERSION: '1.7.5'
+  TF_IN_AUTOMATION: true
+  AWS_DEFAULT_REGION: ap-northeast-2
+
+jobs:
+  terraform-checks:
+    name: Terraform Validation
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        environment: [shared, prod]
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_DEFAULT_REGION }}
+
+      - name: Terraform Format Check
+        id: fmt
+        run: terraform fmt -check -recursive
+        continue-on-error: true
+
+      - name: Terraform Init
+        id: init
+        working-directory: environments/${{ matrix.environment }}
+        run: |
+          terraform init \
+            -backend-config="bucket=${{ secrets.TF_STATE_BUCKET }}" \
+            -backend-config="key=gitops-atlantis/${{ matrix.environment }}/terraform.tfstate" \
+            -backend-config="region=${{ env.AWS_DEFAULT_REGION }}"
+
+      - name: Terraform Validate
+        id: validate
+        working-directory: environments/${{ matrix.environment }}
+        run: terraform validate -no-color
+
+      - name: TFLint
+        uses: terraform-linters/setup-tflint@v4
+        with:
+          tflint_version: latest
+
+      - name: Run TFLint
+        working-directory: environments/${{ matrix.environment }}
+        run: |
+          tflint --init
+          tflint --format compact
+
+      - name: Checkov Security Scan
+        id: checkov
+        uses: bridgecrewio/checkov-action@master
+        with:
+          directory: environments/${{ matrix.environment }}
+          framework: terraform
+          quiet: true
+          skip_check: CKV_AWS_8,CKV_AWS_18,CKV_AWS_21
+        continue-on-error: true
+
+      - name: Comment PR
+        uses: actions/github-script@v7
+        if: github.event_name == 'pull_request'
+        env:
+          FMT_OUTCOME: ${{ steps.fmt.outcome }}
+          INIT_OUTCOME: ${{ steps.init.outcome }}
+          VALIDATE_OUTCOME: ${{ steps.validate.outcome }}
+          CHECKOV_OUTCOME: ${{ steps.checkov.outcome }}
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const output = `#### Terraform CI Results for \`${{ matrix.environment }}\`
+            #### Terraform Format and Style 🖌 \`${{ env.FMT_OUTCOME }}\`
+            #### Terraform Initialization ⚙️ \`${{ env.INIT_OUTCOME }}\`
+            #### Terraform Validation 🤖 \`${{ env.VALIDATE_OUTCOME }}\`
+            #### Security Scan (Checkov) 🔒 \`${{ env.CHECKOV_OUTCOME }}\`
+            
+            *Pushed by: @${{ github.actor }}, Action: \`${{ github.event_name }}\`*`;
+            
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: output
+            })
+
+  cost-estimation:
+    name: Cost Estimation
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Infracost
+        uses: infracost/setup-infracost@v2
+        with:
+          api-key: ${{ secrets.INFRACOST_API_KEY }}
+
+      - name: Generate Infracost JSON
+        run: |
+          infracost breakdown \
+            --path=environments/shared \
+            --format=json \
+            --out-file=/tmp/infracost.json
+
+      - name: Post Infracost comment
+        uses: infracost/infracost-gh-action@v1
+        with:
+          path: /tmp/infracost.json
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          behavior: update

@@ -1,274 +1,276 @@
-# 🚀 StackKit - 5분만에 시작하는 Atlantis
+# StackKit v2 - Infrastructure as Code 템플릿 시스템
 
-StackKit은 팀이 5분만에 자신만의 Atlantis 구축하여 안전하고 효율적인 Infrastructure as Code 워크플로우를 시작할 수 있도록 도와줍니다.
+> 🚀 **즉시 배포 가능한** 엔터프라이즈급 GitOps 인프라 템플릿 시스템
 
----
+## 개요
 
-## ⚡ 5분 빠른 시작
+StackKit은 한국 DevOps/Platform 엔지니어링 팀을 위한 표준화된 Infrastructure as Code (IaC) 템플릿 시스템입니다. Terraform과 Atlantis를 기반으로 한 GitOps 워크플로우를 제공하며, 비용 분석, 보안 검증, Slack 알림 등 엔터프라이즈급 기능을 포함합니다.
 
-### 🎯 목표: 나만의 Atlantis  구축
+### 🎯 핵심 가치 제안
 
-```bash
-# 1. StackKit 클론 (30초)
-git clone https://github.com/ryu-qqq/stackkit.git
-cd stackkit
+- **💰 비용 투명성**: 모든 인프라 변경사항에 대한 실시간 비용 분석
+- **🛡️ 보안 우선**: 자동화된 보안 검증 및 거버넌스 정책
+- **📊 풍부한 알림**: Slack 통합으로 팀 협업 강화
+- **⚡ 즉시 배포**: 검증된 템플릿으로 빠른 프로젝트 시작
+- **📋 표준화**: 47개 표준 변수와 일관된 명명 규칙
 
-# 2. Atlantis 서버 배포 (5분)
-cd atlantis-ecs
-./quick-deploy.sh \
-  --org mycompany \
-  --github-token ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx \
-  --slack-webhook https://hooks.slack.com/services/xxx/xxx/xxx \
-  --vpc-id vpc-12345678  # 기존 VPC 사용 (권장)
+## 주요 구성요소
 
-# 3. 기존 저장소 연결 (1분)
-./connect.sh --atlantis-url http://mycompany-atlantis.aws.com \
-  --repo-name myorg/myrepo \
-  --github-token ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+### 📁 프로젝트 구조
 
 ```
-
-**결과:** 
-- ✅ AWS에 완전한 Atlantis 인프라 배포
-- ✅ GitHub 웹훅 자동 설정으로 PR 기반 워크플로우 활성화  
-- ✅ Slack 알림으로 팀 전체가 실시간 현황 파악
-
----
-
-## ⚙️ 고급 옵션
-
-### VPC 설정 (기존 VPC 활용)
-```bash
-# 기존 VPC 사용 (권장: EIP 한계 방지)
-cd atlantis-ecs
-./quick-deploy.sh --org mycompany \
-  --github-token ghp_xxx \
-  --vpc-id vpc-12345678 \
-  --public-subnets "subnet-abc123,subnet-def456"
+stackkit/
+├── templates/                      # 인프라 템플릿
+│   └── gitops-atlantis/           # 메인 GitOps Atlantis 템플릿
+├── tools/                          # StackKit CLI 도구
+│   ├── stackkit-cli.sh            # 메인 CLI 도구
+│   ├── create-project-infrastructure.sh
+│   ├── add-addon.sh               # 애드온 관리
+│   └── governance-validator.sh     # 거버넌스 검증
+├── addons/                         # 인프라 애드온 모듈
+│   ├── database/                  # 데이터베이스 모듈
+│   ├── messaging/                 # 메시징 서비스
+│   ├── monitoring/                # 모니터링 솔루션
+│   └── storage/                   # 스토리지 솔루션
+├── shared-infra-infrastructure/    # 구현 예시
+├── VARIABLE_STANDARDS.md          # 필수 변수 표준
+└── README.md                      # 이 문서
 ```
 
-### AI 리뷰어 활성화 (실험적 기능)
+### 🏗️ GitOps Atlantis 템플릿
+
+**위치**: `templates/gitops-atlantis/`
+
+엔터프라이즈급 Atlantis 템플릿으로 다음 기능을 제공합니다:
+
+#### 🔍 향상된 분석 기능
+- **리소스 변경 분석**: 상세한 plan 분석 및 리소스 개수 추적
+- **비용 영향 평가**: Infracost 통합으로 월간 비용 추정
+- **보안 검증**: 일반적인 보안 이슈 자동 검사
+- **풍부한 리포팅**: 종합적인 로깅 및 디버깅 정보
+
+#### 💬 소통 & 알림
+- **Slack 통합**: 구조화된 메시지로 풍부한 알림
+- **GitHub 댓글**: 자동 Infracost 비용 분석 댓글
+- **상태 업데이트**: 실시간 plan 및 apply 상태 알림
+- **에러 리포팅**: 디버깅 컨텍스트가 포함된 상세한 오류 정보
+
+#### 🛡️ 보안 & 거버넌스
+- **수동 승인**: 인프라 변경 전 필수 승인 과정
+- **브랜치 보호**: 안전한 운영을 위한 웹훅 이벤트 구성
+- **시크릿 관리**: 보안 웹훅 시크릿 처리
+- **감사 추적**: 인프라 변경사항 완전 추적
+
+## 빠른 시작
+
+### 1. 새 프로젝트 생성
+
 ```bash
-# AI 기반 Terraform 계획 자동 분석
-./quick-deploy.sh --org mycompany \
-  --github-token ghp_xxx \
-  --enable-ai-reviewer \
-  --openai-key sk-xxxxxxxxxxxx \
-  --slack-webhook https://hooks.slack.com/services/xxx/xxx/xxx
+# StackKit CLI를 사용한 프로젝트 생성
+./tools/stackkit-cli.sh new --template gitops-atlantis --name my-project
+
+# 생성된 프로젝트 디렉토리로 이동
+cd my-project-infrastructure
 ```
 
-### HTTPS 도메인 설정
+### 2. 프로젝트 설정
+
 ```bash
-# 커스텀 도메인과 SSL 인증서
-./quick-deploy.sh --org mycompany \
-  --github-token ghp_xxx \
-  --custom-domain atlantis.mycompany.com \
-  --certificate-arn arn:aws:acm:ap-northeast-2:123456:certificate/xxx
+# terraform.tfvars.example 파일을 복사하여 설정
+cp terraform.tfvars.example terraform.tfvars
+
+# 프로젝트별 설정 수정
+vim terraform.tfvars
 ```
 
-## 🔧 필요한 준비물 (5분)
+### 3. 저장소 연결 (Atlantis)
 
-### 1. GitHub Personal Access Token
 ```bash
-# GitHub → Settings → Developer settings → Personal access tokens
-# "Generate new token (classic)" 선택
-# 권한 선택: repo (전체), admin:repo_hook
-# 생성된 ghp_로 시작하는 토큰 복사
-```
+# 기본 연결
+./scripts/connect.sh \
+  --atlantis-url https://atlantis.your-company.com \
+  --repo-name your-org/your-project \
+  --github-token ghp_your_token
 
-
-### 2. AWS 계정 설정
-```bash
-# AWS CLI 설치 및 인증 정보 설정
-aws configure
-# 또는 환경 변수로 설정
-export AWS_ACCESS_KEY_ID=your-key
-export AWS_SECRET_ACCESS_KEY=your-secret
-```
-
-### 3. Slack 웹훅 (선택사항)
-```bash
-# Slack → Apps → Incoming Webhooks
-# Add to Slack → 채널 선택 → Webhook URL 복사
-```
-
-### 4. Infracost 비용 분석 (권장)
-```bash
-# 🎁 무료 플랜으로 시작하기
-# https://infracost.io에서 무료 API 키 생성
-# 회원가입 → API 키 → 환경변수 설정
-export INFRACOST_API_KEY="ico-your-key-here"
-
-# 💰 Infracost 무료 플랜 정보
-# - 월 1,000회 추정 무료 (소규모 팀에 충분)
-# - PR당 비용 차이 자동 계산
-# - 클라우드 대시보드 접근
-# - Slack/GitHub 통합
-# - 신용카드 불필요
-
-# StackKit 자동 설치 방식
-# 공식 Atlantis 이미지에 Infracost를 런타임에 설치
-# 별도의 컨테이너 이미지 빌드 불필요
-```
-
----
-
-## 📦 무엇이 설치되나요?
-
-### 🏗️ AWS 인프라 스택
-- **ECS Fargate**: Atlantis 서버 실행 환경
-- **Application Load Balancer**: 외부 접근을 위한 로드밸런서
-- **Secrets Manager**: GitHub 토큰, OpenAI 키 안전한 보관
-- **CloudWatch**: 로그 및 모니터링
-
----
-
-## 🚀 주요 기능
-
-### ⚡ 자동화된 워크플로우
-- **PR 생성** → 자동 `terraform plan` 실행
-- **Slack 알림** → 팀에 실시간 상태 공유
-- **승인 후 Apply** → 안전한 인프라 변경
-
-### 🛡️ 보안 중심 설계
-- **시크릿 관리**: AWS Secrets Manager를 통한 안전한 토큰 보관
-- **VPC 격리**: 모든 컴포넌트가 프라이빗 서브넷에서 실행
-- **암호화**: 저장 및 전송 데이터 암호화
-- **접근 제어**: 최소 권한 원칙 적용
-
----
-
-## 🎯 고급 사용법
-
-### 사용자 정의 도메인 설정
-```bash
-cd atlantis-ecs
-./quick-deploy.sh --org mycompany \
-  --github-token ghp_xxx \
-  --custom-domain atlantis.mycompany.com \
-  --certificate-arn arn:aws:acm:ap-northeast-2:123:certificate/xxx
-```
-
-### 프로덕션 환경 배포 (기존 VPC 사용 권장)
-```bash
-cd atlantis-ecs
-./quick-deploy.sh --org enterprise \
-  --github-token ghp_xxx \
-  --vpc-id vpc-prod123 \
-  --public-subnets "subnet-prod1,subnet-prod2" \
-  --private-subnets "subnet-prod3,subnet-prod4" \
+# 전체 기능이 포함된 연결 (Slack + 비용 분석)
+./scripts/connect.sh \
+  --atlantis-url https://atlantis.your-company.com \
+  --repo-name your-org/your-project \
+  --github-token ghp_your_token \
+  --slack-webhook https://hooks.slack.com/services/YOUR/SLACK/WEBHOOK \
+  --infracost-key ico_your_infracost_key \
   --environment prod
 ```
 
-### 완전한 설정 예시 (모든 기능 활성화)
+### 4. GitOps 워크플로우
+
+1. **피처 브랜치 생성**: `git checkout -b feature/your-feature`
+2. **인프라 수정**: `.tf` 파일 수정
+3. **Pull Request 생성**: Atlantis가 자동으로 `terraform plan` 실행
+4. **변경사항 검토**: plan 출력, 비용 분석, 보안 검사 확인
+5. **PR 승인**: 팀의 인프라 변경 승인 받기
+6. **변경사항 적용**: `atlantis apply` 실행하여 인프라 배포
+
+## 핵심 기능
+
+### 🔧 StackKit CLI 도구
+
+**메인 명령어**: `./tools/stackkit-cli.sh`
+
 ```bash
-cd atlantis-ecs
-./quick-deploy.sh --org enterprise \
-  --github-token ghp_xxx \
-  --vpc-id vpc-12345678 \
-  --custom-domain atlantis.enterprise.com \
-  --certificate-arn arn:aws:acm:ap-northeast-2:123456:certificate/xxx \
-  --enable-ai-reviewer \
-  --openai-key sk-xxxxxxxxxxxx \
-  --slack-webhook https://hooks.slack.com/services/xxx/xxx/xxx
+# 새 프로젝트 생성
+stackkit-cli.sh new --template gitops-atlantis --name user-api
+
+# 애드온 추가
+stackkit-cli.sh addon add database/mysql-rds user-api
+
+# 프로젝트 검증
+stackkit-cli.sh validate
+
+# 인프라 배포
+stackkit-cli.sh deploy --env dev
+
+# 비용 분석
+stackkit-cli.sh cost --env dev
 ```
 
-### 여러 저장소 일괄 연결
+### 📦 애드온 시스템
+
+사용 가능한 애드온들:
+
+- **database/**: MySQL RDS, PostgreSQL, DynamoDB
+- **messaging/**: SQS, SNS, EventBridge
+- **monitoring/**: CloudWatch, X-Ray
+- **storage/**: S3, EFS
+- **compute/**: Lambda, ECS 추가 구성
+
 ```bash
-# 저장소 목록 파일 생성
-echo "mycompany/backend-infra
-mycompany/frontend-infra  
-mycompany/data-infra" > repos.txt
+# 애드온 목록 확인
+./tools/add-addon.sh list
 
-# Atlantis URL 설정 (배포 후 ALB DNS 또는 커스텀 도메인)
-ATLANTIS_URL="https://mycompany-atlantis-alb-123456789.ap-northeast-2.elb.amazonaws.com"
-
-# 모든 저장소에 대해 연결 스크립트 실행
-cd atlantis-ecs
-while read repo; do
-  ./connect.sh --atlantis-url "$ATLANTIS_URL" \
-    --repo-name "$repo" \
-    --github-token ghp_xxx
-done < repos.txt
+# 프로젝트에 애드온 추가
+./tools/add-addon.sh add database/mysql-rds my-project
 ```
+
+### 🔒 거버넌스 검증
+
+**12개 카테고리 정책 검증**:
+- 보안 (IAM, 암호화, 네트워크)
+- 비용 최적화
+- 태깅 표준
+- 명명 규칙
+- 백업 및 재해 복구
+- 모니터링 및 로깅
+
+```bash
+# 프로젝트 검증
+./tools/governance-validator.sh validate --project-dir ./my-project
+
+# HTML 리포트 생성
+./tools/governance-validator.sh report --output html --project-dir ./my-project
+```
+
+## 표준화
+
+### 📋 변수 표준 (VARIABLE_STANDARDS.md)
+
+StackKit은 **47개 이상의 표준화된 Terraform 변수**를 제공합니다:
+
+- **프로젝트 메타데이터**: `project_name`, `team`, `organization`, `environment`
+- **AWS 설정**: `aws_region`, `tags`
+- **네트워킹**: `vpc_cidr`, `enable_nat_gateway`
+- **ECS**: `ecs_task_cpu`, `ecs_task_memory`, `enable_autoscaling`
+- **보안**: `allowed_cidr_blocks`, `secret_recovery_window_days`
+
+### 🎯 명명 규칙
+
+- **snake_case** 사용 (Terraform 표준)
+- **prefix 기반 그룹핑** (service_name 형태)  
+- **boolean은 enable_/use_ prefix**
+- **기존 리소스는 existing_ prefix**
+
+## 실제 구현 예시
+
+**shared-infra-infrastructure/** 디렉토리는 StackKit 템플릿을 사용한 실제 구현 예시입니다:
+
+- Connectly 조직의 플랫폼 팀
+- GitOps Atlantis 템플릿 기반
+- 개발/스테이징/프로덕션 환경 분리
+- Infracost 비용 분석 통합
+- Slack 알림 설정
+
+## 고급 사용법
+
+### 환경별 배포
+
+```bash
+# 개발 환경
+stackkit-cli.sh deploy --env dev --auto-approve
+
+# 스테이징 환경 (수동 승인)
+stackkit-cli.sh deploy --env staging
+
+# 프로덕션 환경 (최대 검증)
+stackkit-cli.sh deploy --env prod --validate-all
+```
+
+### 멀티 프로젝트 관리
+
+```bash
+# 여러 프로젝트 동시 검증
+for project in user-api order-api payment-api; do
+  stackkit-cli.sh validate $project
+done
+
+# 의존성 순서로 배포
+stackkit-cli.sh deploy-pipeline --projects "shared-infra,user-api,order-api"
+```
+
+## 문제 해결
+
+### 일반적인 이슈
+
+1. **웹훅이 트리거되지 않음**
+   - 웹훅 URL이 GitHub에서 접근 가능한지 확인
+   - 웹훅 시크릿이 GitHub와 Atlantis에서 일치하는지 확인
+
+2. **Plan 실패**
+   - AWS 자격 증명 및 권한 확인
+   - Terraform 백엔드 설정 검증
+
+3. **비용 분석이 표시되지 않음**
+   - `INFRACOST_API_KEY` 설정 확인
+   - infracost 바이너리 가용성 확인
+
+4. **Slack 알림이 작동하지 않음**
+   - `SLACK_WEBHOOK_URL` 정확성 확인
+   - Slack 앱 권한 확인
+
+### 디버그 모드
+
+```bash
+# Atlantis 서버 설정에서
+ATLANTIS_LOG_LEVEL=debug
+TF_LOG=DEBUG
+```
+
+## 기여하기
+
+1. 새로운 애드온 개발
+2. 거버넌스 정책 개선
+3. 템플릿 기능 확장
+4. 문서화 개선
+
+## 지원
+
+- 📚 [StackKit 문서](https://github.com/company/stackkit-terraform-modules)
+- 🐛 [이슈 리포트](https://github.com/company/stackkit-terraform-modules/issues)
+- 💬 팀 Slack: #infrastructure
 
 ---
 
-## 📚 추가 리소스
+**Version**: 2.0.0  
+**마지막 업데이트**: 2024-09-11  
+**관리팀**: StackKit Platform Team
 
-### 🏗️ Terraform 모듈 활용
-StackKit에는 12개 AWS 서비스의 표준화된 모듈이 포함되어 있습니다:
-
-```bash
-# 새 프로젝트에서 StackKit 모듈 사용
-./terraform/tools/stackkit-cli.sh create my-web-app dev
-
-# 검증 및 배포
-./terraform/tools/stackkit-cli.sh validate my-web-app dev
-./terraform/tools/stackkit-cli.sh deploy my-web-app dev
-```
-
-**📖 상세 가이드**: [Terraform 모듈 완전 가이드](./terraform/README.md)
-
-### 💡 실제 사용 예제 (추가 예정..)
-**📁 예제 모음**: [Examples 디렉토리](./examples/)
-- 웹 애플리케이션 스택
-- API 서버 구성
-- 데이터 파이프라인
-- 마이크로서비스 아키텍처
-
----
-
-## 🔍 문제 해결
-
-### 자주 묻는 질문
-
-**Q: AWS 권한이 부족하다는 오류가 나와요**
-```bash
-# IAM 사용자에게 다음 정책 연결 필요:
-# - AdministratorAccess (또는 세분화된 권한)
-aws iam attach-user-policy --user-name your-user --policy-arn arn:aws:iam::aws:policy/AdministratorAccess
-```
-
-**Q: GitHub 웹훅이 제대로 작동하지 않아요**
-```bash
-# 토큰 권한 확인
-# repo (전체), admin:repo_hook 권한이 필요합니다
-```
-
-**Q: Infracost 비용 분석이 작동하지 않아요**
-```bash
-# StackKit은 Infracost 공식 이미지를 사용하므로 바이너리 문제 없음
-# ghcr.io/infracost/infracost-atlantis:atlantis-latest
-
-# Infracost 사용하려면:
-# 1. API 키 설정 (필수)
-export INFRACOST_API_KEY="ico-your-key-here"
-
-# 2. Secrets Manager에 API 키 추가
-aws secretsmanager update-secret \
-  --secret-id your-atlantis-secrets \
-  --secret-string '{"infracost_api_key": "ico-your-key-here"}'
-
-# 3. ECS에서 자동으로 활성화됨
-# - Plan 시 비용 분석 자동 실행
-# - GitHub PR에 비용 댓글 자동 생성
-# - Slack 알림에 비용 정보 포함
-```
-
----
-
-### 개발 환경 설정
-```bash
-# 저장소 클론
-git clone https://github.com/ryu-qqq/stackkit.git
-cd stackkit
-
-# 개발용 브랜치 생성
-git checkout -b feature/my-improvement
-
-# 변경사항 작성 후 테스트
-./quick-start.sh --dry-run --org test --github-token ghp_xxx 
-```
-
----
+🚀 **즉시 배포 가능한 엔터프라이즈급 인프라 자동화**

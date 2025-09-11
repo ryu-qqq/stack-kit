@@ -120,3 +120,71 @@ nbdist/
 
 # Virtual machine crash logs
 hs_err_pid*
+
+# ===================================================
+# Security Framework Specific Ignores
+# ===================================================
+
+# Terraform plan files (contain sensitive data)
+security/security-plan-*.tfplan
+*.tfplan
+
+# Terraform output files (may contain sensitive information)
+security/outputs-*.json
+
+# Security assessment reports (may contain sensitive findings)
+claudedocs/security-reports/*.md
+!claudedocs/security-reports/README.md
+
+# Lambda deployment packages
+security/secrets/lambda/*.zip
+security/network/lambda/*.zip
+security/compliance/lambda/*.zip
+/tmp/*.zip
+
+# Temporary Lambda source files
+lambda-*.py
+function-*.zip
+
+# Security credentials and keys
+*.pem
+*.key
+*.crt
+*.p12
+*.pfx
+
+# AWS credential files
+.aws/
+credentials
+config
+
+# Secrets backup files
+secrets-backup-*.json
+*.secret
+
+# Security test artifacts
+security-test-*.log
+penetration-test-*.txt
+vulnerability-scan-*.json
+
+# OPA policy test files
+security/compliance/opa-policies/*.test
+security/compliance/opa-policies/test-results/
+
+# Compliance report files (contain sensitive security information)
+compliance-report-*.pdf
+soc2-report-*.json
+hipaa-assessment-*.xml
+
+# Security monitoring data
+flow-logs-*.txt
+security-events-*.json
+threat-intel-*.csv
+
+# Rotation automation temporary files
+rotation-*.tmp
+old-secrets-*.json
+
+# Security framework deployment state
+security-deployment-*.json
+security-status-*.yaml
