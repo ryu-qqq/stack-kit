@@ -1,0 +1,12 @@
+name: "nodejs-ecs"
+type: "specialized"
+version: "1.2.0"
+maturity: "stable"
+priority: 80
+description: "Node.js application on ECS Fargate"
+categories: ["compute", "containerization"]
+tech_stack: ["nodejs"]
+dependencies: ["base-infrastructure"]
+conflicts: []
+author: "StackKit"
+last_updated: "2024-09-10"

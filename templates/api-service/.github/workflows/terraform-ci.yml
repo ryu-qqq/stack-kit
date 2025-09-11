@@ -1,0 +1,329 @@
+name: 🏗️ Terraform CI/CD Pipeline
+
+on:
+  pull_request:
+    branches: [main, develop]
+    paths:
+      - 'environments/**'
+      - 'modules/**'
+      - '*.tf'
+      - '*.tfvars'
+  push:
+    branches: [main]
+    paths:
+      - 'environments/**'
+      - 'modules/**'
+      - '*.tf'
+      - '*.tfvars'
+
+env:
+  TF_VERSION: "1.7.5"
+  TF_IN_AUTOMATION: true
+  TF_INPUT: false
+
+jobs:
+  # =============================================================================
+  # Validation and Security Checks
+  # =============================================================================
+  validate:
+    name: 🔍 Validate & Security Scan
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    
+    steps:
+      - name: 📥 Checkout
+        uses: actions/checkout@v4
+        
+      - name: 🔧 Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          
+      - name: 📝 Terraform Format Check
+        run: |
+          echo "🎨 Checking Terraform format..."
+          terraform fmt -check -recursive
+          if [ $? -ne 0 ]; then
+            echo "❌ Terraform format check failed. Please run 'terraform fmt -recursive'"
+            exit 1
+          fi
+          echo "✅ Terraform format is correct"
+          
+      - name: 🔍 Terraform Validation
+        run: |
+          echo "🔍 Validating Terraform configuration..."
+          find environments -name "*.tf" -exec dirname {} \; | sort -u | while read dir; do
+            echo "Validating: $dir"
+            cd "$dir"
+            terraform init -backend=false
+            terraform validate
+            cd - > /dev/null
+          done
+          echo "✅ All configurations are valid"
+          
+      - name: 🔒 Security Scan with tfsec
+        uses: aquasecurity/tfsec-action@v1.0.3
+        with:
+          soft_fail: true
+          format: sarif
+          output: tfsec-results.sarif
+          
+      - name: 📊 Upload Security Scan Results
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: tfsec-results.sarif
+          
+      - name: 🛡️ Security Scan with Checkov
+        uses: bridgecrewio/checkov-action@master
+        with:
+          directory: .
+          soft_fail: true
+          framework: terraform
+          output_format: sarif
+          output_file_path: checkov-results.sarif
+          
+      - name: 📊 Upload Checkov Results
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: checkov-results.sarif
+
+  # =============================================================================
+  # Development Environment Plan
+  # =============================================================================
+  plan-dev:
+    name: 📋 Plan (Development)
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    needs: validate
+    environment: development
+    
+    steps:
+      - name: 📥 Checkout
+        uses: actions/checkout@v4
+        
+      - name: 🔧 Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          
+      - name: 🔐 Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ vars.AWS_REGION || 'ap-northeast-2' }}
+          
+      - name: 🚀 Terraform Init (Dev)
+        working-directory: environments/dev
+        run: terraform init
+        
+      - name: 📋 Terraform Plan (Dev)
+        working-directory: environments/dev
+        run: |
+          terraform plan -out=tfplan
+          terraform show -no-color tfplan > plan-output.txt
+          
+      - name: 💰 Cost Analysis with Infracost
+        uses: infracost/infracost-action@v1
+        with:
+          api-key: ${{ secrets.INFRACOST_API_KEY }}
+          path: environments/dev
+          format: json
+          out-file: infracost-dev.json
+        continue-on-error: true
+        
+      - name: 📝 Comment PR with Plan
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const plan = fs.readFileSync('environments/dev/plan-output.txt', 'utf8');
+            
+            let cost = "Cost analysis not available";
+            try {
+              const costData = JSON.parse(fs.readFileSync('infracost-dev.json', 'utf8'));
+              cost = `Monthly cost: $${costData.totalMonthlyCost || 'N/A'}`;
+            } catch (e) {
+              console.log('Cost data not available');
+            }
+            
+            const output = `## 🏗️ Terraform Plan (Development)
+            
+            ### 📋 Plan Summary
+            \`\`\`
+            ${plan.length > 50000 ? plan.substring(0, 50000) + '\n... (truncated)' : plan}
+            \`\`\`
+            
+            ### 💰 Cost Impact
+            ${cost}
+            
+            ---
+            *Generated by StackKit v2 CI/CD*`;
+            
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: output
+            });
+
+  # =============================================================================
+  # Production Environment Plan (on main branch)
+  # =============================================================================
+  plan-prod:
+    name: 📋 Plan (Production)
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    environment: production
+    
+    steps:
+      - name: 📥 Checkout
+        uses: actions/checkout@v4
+        
+      - name: 🔧 Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          
+      - name: 🔐 Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.PROD_AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.PROD_AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ vars.AWS_REGION || 'ap-northeast-2' }}
+          
+      - name: 🚀 Terraform Init (Prod)
+        working-directory: environments/prod
+        run: terraform init
+        
+      - name: 📋 Terraform Plan (Prod)
+        working-directory: environments/prod
+        run: |
+          terraform plan -out=tfplan
+          terraform show -no-color tfplan > plan-output.txt
+          
+      - name: 💰 Cost Analysis with Infracost (Prod)
+        uses: infracost/infracost-action@v1
+        with:
+          api-key: ${{ secrets.INFRACOST_API_KEY }}
+          path: environments/prod
+          format: table
+        continue-on-error: true
+        
+      - name: 📊 Upload Plan Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: terraform-plan-prod
+          path: environments/prod/tfplan
+          retention-days: 30
+
+  # =============================================================================
+  # Auto-Deploy Development (on main branch merge)
+  # =============================================================================
+  deploy-dev:
+    name: 🚀 Deploy (Development)
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    environment: development
+    needs: plan-prod
+    
+    steps:
+      - name: 📥 Checkout
+        uses: actions/checkout@v4
+        
+      - name: 🔧 Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          
+      - name: 🔐 Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ vars.AWS_REGION || 'ap-northeast-2' }}
+          
+      - name: 🚀 Terraform Init (Dev)
+        working-directory: environments/dev
+        run: terraform init
+        
+      - name: 🏗️ Terraform Apply (Dev)
+        working-directory: environments/dev
+        run: terraform apply -auto-approve
+        
+      - name: 📤 Output Infrastructure Info
+        working-directory: environments/dev
+        run: |
+          echo "## 🎉 Development Deployment Complete" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### 🔗 Application Access" >> $GITHUB_STEP_SUMMARY
+          terraform output -json | jq -r '.application_url.value' | xargs -I {} echo "- Application URL: {}" >> $GITHUB_STEP_SUMMARY
+          terraform output -json | jq -r '.health_check_url.value' | xargs -I {} echo "- Health Check: {}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### 📊 Resources Created" >> $GITHUB_STEP_SUMMARY
+          terraform state list | wc -l | xargs -I {} echo "- Total Resources: {}" >> $GITHUB_STEP_SUMMARY
+
+  # =============================================================================
+  # Manual Production Deployment (with approval)
+  # =============================================================================
+  deploy-prod:
+    name: 🚀 Deploy (Production)
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    environment: 
+      name: production
+      url: ${{ steps.deploy.outputs.application_url }}
+    needs: [plan-prod, deploy-dev]
+    
+    steps:
+      - name: 📥 Checkout
+        uses: actions/checkout@v4
+        
+      - name: 🔧 Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          
+      - name: 🔐 Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.PROD_AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.PROD_AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ vars.AWS_REGION || 'ap-northeast-2' }}
+          
+      - name: 📥 Download Plan Artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: terraform-plan-prod
+          path: environments/prod/
+          
+      - name: 🚀 Terraform Init (Prod)
+        working-directory: environments/prod
+        run: terraform init
+        
+      - name: 🏗️ Terraform Apply (Prod)
+        id: deploy
+        working-directory: environments/prod
+        run: |
+          terraform apply tfplan
+          echo "application_url=$(terraform output -raw application_url)" >> $GITHUB_OUTPUT
+          
+      - name: 📤 Output Infrastructure Info
+        working-directory: environments/prod
+        run: |
+          echo "## 🎉 Production Deployment Complete" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### 🔗 Application Access" >> $GITHUB_STEP_SUMMARY
+          terraform output -json | jq -r '.application_url.value' | xargs -I {} echo "- Application URL: {}" >> $GITHUB_STEP_SUMMARY
+          terraform output -json | jq -r '.health_check_url.value' | xargs -I {} echo "- Health Check: {}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### 📊 Resources Created" >> $GITHUB_STEP_SUMMARY
+          terraform state list | wc -l | xargs -I {} echo "- Total Resources: {}" >> $GITHUB_STEP_SUMMARY
+          
+      - name: 🔔 Notify Deployment Success
+        if: success()
+        run: |
+          echo "✅ Production deployment completed successfully!"
+          echo "Application is now available at: $(terraform output -raw application_url)"

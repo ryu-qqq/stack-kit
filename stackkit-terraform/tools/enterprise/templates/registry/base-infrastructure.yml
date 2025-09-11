@@ -1,0 +1,94 @@
+# Base Infrastructure Template
+# Provides fundamental networking, security, and monitoring components
+
+name: "base-infrastructure"
+type: "base"
+version: "1.0.0"
+maturity: "stable"
+priority: 100
+
+description: "Base infrastructure template providing VPC, security groups, and basic monitoring"
+
+categories:
+  - "networking"
+  - "security"
+  - "monitoring"
+
+tech_stack: []  # Universal template
+
+dependencies: []
+conflicts: []
+
+# Template metadata
+author: "StackKit Enterprise"
+last_updated: "2024-09-10"
+license: "MIT"
+
+# Required AWS services
+aws_services:
+  - "vpc"
+  - "ec2"
+  - "cloudwatch"
+  - "iam"
+
+# Minimum requirements
+requirements:
+  terraform_version: ">= 1.5.0"
+  aws_provider_version: "~> 5.0"
+
+# Configuration schema
+variables:
+  required:
+    - project_name
+    - environment
+    - team_name
+    - org_name
+  
+  optional:
+    - vpc_cidr
+    - availability_zones
+    - enable_nat_gateway
+    - single_nat_gateway
+
+# Output specifications
+outputs:
+  - vpc_id
+  - vpc_cidr_block
+  - public_subnet_ids
+  - private_subnet_ids
+  - internet_gateway_id
+  - nat_gateway_ids
+
+# Resource estimation
+estimated_monthly_cost:
+  dev: "$50-100"
+  staging: "$100-200"
+  prod: "$200-400"
+
+deployment_time: "15-30 minutes"
+
+# Documentation
+documentation:
+  readme_url: "https://github.com/your-org/stackkit-templates/tree/main/base-infrastructure"
+  architecture_diagram: "https://github.com/your-org/stackkit-templates/blob/main/base-infrastructure/architecture.png"
+  
+examples:
+  - path: "examples/basic-vpc"
+    description: "Basic VPC with public and private subnets"
+  - path: "examples/multi-region"
+    description: "Multi-region VPC setup"
+
+# Compliance certifications
+compliance:
+  sox: true
+  gdpr: true
+  pci: true
+  hipaa: true
+  iso27001: true
+
+# Testing
+testing:
+  terraform_validate: true
+  security_scan: true
+  cost_estimation: true
+  example_deployments: true

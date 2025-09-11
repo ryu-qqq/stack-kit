@@ -1,0 +1,214 @@
+# SOX Compliance Template
+# Implements Sarbanes-Oxley Act compliance requirements
+
+name: "compliance-sox"
+type: "compliance"
+version: "1.0.0"
+maturity: "stable"
+priority: 90
+
+description: "SOX compliance template with audit trails, configuration tracking, and access controls"
+
+categories:
+  - "governance"
+  - "audit"
+  - "compliance"
+  - "security"
+
+tech_stack: [] # Applies to all technology stacks
+
+dependencies:
+  - "base-infrastructure"
+
+conflicts: []
+
+# Template metadata
+author: "StackKit Enterprise"
+last_updated: "2024-09-10"
+license: "MIT"
+
+# Required AWS services
+aws_services:
+  - "cloudtrail"
+  - "config"
+  - "iam"
+  - "kms"
+  - "s3"
+  - "sns"
+  - "cloudwatch"
+
+# Compliance framework details
+compliance_framework:
+  name: "Sarbanes-Oxley Act (SOX)"
+  sections:
+    - "Section 302 - Corporate Responsibility"
+    - "Section 404 - Management Assessment of Internal Controls"
+    - "Section 409 - Real Time Issuer Disclosures"
+
+# SOX requirements implementation
+sox_requirements:
+  audit_trail:
+    description: "Comprehensive audit logging of all system activities"
+    aws_services: ["cloudtrail", "cloudwatch"]
+    retention_period: "7_years"
+    
+  configuration_management:
+    description: "Track and monitor all configuration changes"
+    aws_services: ["config", "config_rules"]
+    remediation: "automatic"
+    
+  access_controls:
+    description: "Role-based access controls with principle of least privilege"
+    aws_services: ["iam", "sts"]
+    mfa_required: true
+    
+  data_integrity:
+    description: "Ensure data cannot be altered without detection"
+    aws_services: ["s3", "kms"]
+    versioning: true
+    encryption: true
+    
+  financial_reporting_controls:
+    description: "Controls specific to financial data processing"
+    aws_services: ["kms", "secrets_manager"]
+    encryption_mandatory: true
+    
+  incident_response:
+    description: "Automated incident detection and response"
+    aws_services: ["cloudwatch", "sns", "lambda"]
+    notification_channels: ["email", "slack"]
+
+# Configuration schema
+variables:
+  required:
+    - org_name
+    - project_name
+    - environment
+    - sox_officer_email
+  
+  optional:
+    - audit_bucket_name
+    - kms_key_rotation_days
+    - config_delivery_channel
+    - notification_endpoints
+
+# Default configurations
+defaults:
+  audit_retention_years: 7
+  kms_key_rotation_days: 365
+  config_snapshot_frequency: "daily"
+  cloudtrail_regions: "all"
+  
+# SOX-specific resources
+resources:
+  cloudtrail:
+    multi_region: true
+    include_global_services: true
+    enable_log_file_validation: true
+    kms_encryption: true
+    
+  config:
+    global_resource_types_region: true
+    include_global_resource_types: true
+    delivery_frequency: "TwentyFour_Hours"
+    
+  config_rules:
+    - "root-access-key-check"
+    - "iam-password-policy"
+    - "cloudtrail-enabled"
+    - "encrypted-volumes"
+    - "s3-bucket-public-read-prohibited"
+    - "s3-bucket-public-write-prohibited"
+    - "rds-storage-encrypted"
+    
+  iam_policies:
+    - "SOXAuditorReadOnly"
+    - "SOXComplianceEnforcement" 
+    - "SOXDataProtection"
+
+# Monitoring and alerting
+monitoring:
+  compliance_metrics:
+    - "Configuration drift detection"
+    - "Unauthorized access attempts"
+    - "Failed authentication events"
+    - "Privileged operation tracking"
+    
+  alerts:
+    critical:
+      - "CloudTrail disabled"
+      - "Config recorder stopped"
+      - "Root account usage"
+      - "Unauthorized API calls"
+    
+    warning:
+      - "Configuration changes"
+      - "New IAM user creation"
+      - "Policy modifications"
+
+# Output specifications
+outputs:
+  - cloudtrail_arn
+  - config_recorder_name
+  - audit_bucket_name
+  - compliance_dashboard_url
+  - sox_policy_arns
+
+# Documentation and procedures
+documentation:
+  sox_procedures_url: "https://docs.example.com/sox-procedures"
+  audit_guide_url: "https://docs.example.com/sox-audit-guide"
+  incident_response_url: "https://docs.example.com/sox-incident-response"
+
+# Audit procedures
+audit_procedures:
+  quarterly_review:
+    - "Review access control changes"
+    - "Validate configuration compliance"
+    - "Check audit log completeness"
+    - "Verify encryption status"
+    
+  annual_assessment:
+    - "Complete SOX 404 assessment"
+    - "Update risk assessments"
+    - "Review and test controls"
+    - "Update documentation"
+
+# Cost estimation (compliance overhead)
+estimated_monthly_cost:
+  small_environment: "$100-200"
+  medium_environment: "$300-500"
+  large_environment: "$800-1500"
+
+# Training requirements
+training:
+  required_roles: ["developers", "ops_team", "management"]
+  topics:
+    - "SOX compliance overview"
+    - "Access control procedures"
+    - "Change management process"
+    - "Incident reporting"
+    
+# Certification and validation
+validation:
+  automated_checks: true
+  periodic_assessment: "quarterly"
+  external_audit_support: true
+  
+# Risk mitigation
+risk_controls:
+  high_risk:
+    - "Segregation of duties"
+    - "Automated controls where possible"
+    - "Continuous monitoring"
+    
+  medium_risk:
+    - "Regular access reviews"
+    - "Configuration baselines"
+    - "Change approval process"
+    
+# Integration with other systems
+integrations:
+  siem_tools: ["splunk", "datadog", "sumologic"]
+  ticketing_systems: ["jira", "servicenow"]
+  notification_channels: ["slack", "email", "pagerduty"]

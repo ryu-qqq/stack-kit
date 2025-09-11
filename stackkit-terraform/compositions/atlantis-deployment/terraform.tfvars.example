@@ -1,0 +1,51 @@
+# =======================================
+# Atlantis Production Environment
+# Copy this file to terraform.tfvars and fill in your values
+# =======================================
+
+# Basic Configuration
+project_name = "atlantis"
+environment  = "prod"
+aws_region   = "ap-northeast-2"
+
+# Required: Organization
+org_name = "your-company"  # 소문자, 숫자, 하이픈만 사용
+
+# Network Configuration
+vpc_cidr             = "10.0.0.0/16"
+public_subnet_cidrs  = ["10.0.1.0/24", "10.0.2.0/24"]
+private_subnet_cidrs = ["10.0.10.0/24", "10.0.20.0/24"]
+
+# Required: SSL Certificate
+certificate_arn = "arn:aws:acm:ap-northeast-2:123456789012:certificate/your-cert-id"
+
+# Optional: Custom Domain
+custom_domain = ""  # 예: "atlantis.your-company.com"
+
+# Required: GitHub Configuration  
+github_token   = "github_pat_11ABCDEF..."  # GitHub Personal Access Token
+git_username   = "your-github-username"
+repo_allowlist = [
+  "github.com/your-org/repo1",
+  "github.com/your-org/repo2",
+  "github.com/your-org/*"  # 와일드카드 가능
+]
+
+# Optional: GitHub Webhook Secret (auto-generated if empty)
+webhook_secret = ""
+
+# ECS Configuration
+task_cpu      = "1024"   # 256, 512, 1024, 2048, 4096
+task_memory   = "2048"   # CPU에 따라 적절한 값
+desired_count = 1        # 인스턴스 개수
+
+# Monitoring Configuration
+log_retention_days = 30
+
+# Optional: Advanced Monitoring
+alert_email              = "alerts@your-company.com"
+slack_webhook_url        = "https://hooks.slack.com/services/..."
+enable_advanced_monitoring = false  # Lambda 헬스체크 (불필요하므로 false 권장)
+
+# Optional: Cost Management
+infracost_api_key = ""  # Infracost API 키 (비용 분석용)

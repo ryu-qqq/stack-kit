@@ -1,0 +1,170 @@
+# Node.js ECS Template
+# Containerized Node.js application on AWS ECS Fargate
+
+name: "nodejs-ecs"
+type: "specialized"
+version: "1.2.0"
+maturity: "stable"
+priority: 80
+
+description: "Node.js application deployment on ECS Fargate with load balancing and auto-scaling"
+
+categories:
+  - "compute"
+  - "containerization"
+  - "web-application"
+
+tech_stack:
+  - "nodejs"
+  - "docker"
+
+dependencies:
+  - "base-infrastructure"
+
+conflicts: []
+
+# Template metadata
+author: "StackKit Enterprise"
+last_updated: "2024-09-10"
+license: "MIT"
+
+# Required AWS services
+aws_services:
+  - "ecs"
+  - "ecr"
+  - "elasticloadbalancing"
+  - "application-autoscaling"
+  - "logs"
+
+# Minimum requirements
+requirements:
+  terraform_version: ">= 1.5.0"
+  aws_provider_version: "~> 5.0"
+  docker_support: true
+
+# Configuration schema
+variables:
+  required:
+    - container_image
+    - container_port
+    - vpc_id
+    - private_subnet_ids
+    - public_subnet_ids
+  
+  optional:
+    - task_cpu
+    - task_memory
+    - min_capacity
+    - max_capacity
+    - desired_capacity
+    - health_check_path
+    - environment_variables
+
+# Default values
+defaults:
+  task_cpu: "1024"
+  task_memory: "2048"
+  container_port: 3000
+  min_capacity: 1
+  max_capacity: 10
+  desired_capacity: 2
+  health_check_path: "/health"
+
+# Output specifications
+outputs:
+  - application_url
+  - load_balancer_dns
+  - ecs_cluster_name
+  - ecs_service_name
+  - task_definition_arn
+
+# Resource estimation
+estimated_monthly_cost:
+  dev: "$30-60"
+  staging: "$80-150"
+  prod: "$200-500"
+
+deployment_time: "20-40 minutes"
+
+# Features
+features:
+  - "Auto-scaling based on CPU/Memory"
+  - "Application Load Balancer with health checks"
+  - "CloudWatch logging and monitoring"
+  - "Blue/Green deployment support"
+  - "SSL/TLS termination"
+  - "Container image scanning"
+
+# Node.js specific configurations
+nodejs:
+  supported_versions: ["16", "18", "20"]
+  runtime_optimizations:
+    - "Multi-stage Docker builds"
+    - "Node.js cluster mode support"
+    - "PM2 process management"
+    - "Memory optimization"
+  
+  recommended_packages:
+    - "express"
+    - "helmet" # Security
+    - "compression" # Performance
+    - "winston" # Logging
+    - "prom-client" # Metrics
+
+# Performance optimization
+performance:
+  cpu_scaling_threshold: 70
+  memory_scaling_threshold: 80
+  connection_draining_timeout: 300
+  keep_alive_timeout: 65
+
+# Security features
+security:
+  ecs_exec_enabled: false # Disable for production
+  secrets_management: "aws_secrets_manager"
+  vpc_isolation: true
+  security_group_rules: "least_privilege"
+
+# Documentation
+documentation:
+  readme_url: "https://github.com/your-org/stackkit-templates/tree/main/nodejs-ecs"
+  deployment_guide: "https://docs.example.com/nodejs-ecs-deployment"
+  
+examples:
+  - path: "examples/express-api"
+    description: "Express.js REST API with PostgreSQL"
+  - path: "examples/nextjs-app"
+    description: "Next.js application with SSR"
+
+# Testing
+testing:
+  unit_tests: true
+  integration_tests: true
+  load_tests: true
+  security_tests: true
+  
+test_scenarios:
+  - "Basic application deployment"
+  - "Auto-scaling under load"
+  - "Health check failures"
+  - "Container restart scenarios"
+
+# Monitoring and observability
+monitoring:
+  default_metrics:
+    - "CPU utilization"
+    - "Memory utilization"
+    - "Request count"
+    - "Response time"
+    - "Error rate"
+  
+  custom_dashboards: true
+  alerting_rules: true
+  distributed_tracing: "aws_x_ray"
+
+# Compliance certifications
+compliance:
+  sox: true
+  gdpr: true
+  pci: false # Requires additional security controls
+  hipaa: false # Requires additional encryption

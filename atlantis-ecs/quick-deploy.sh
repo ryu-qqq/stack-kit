@@ -95,6 +95,7 @@ ORG=""
 GITHUB_TOKEN=""
 TF_VERSION="1.7.5"
 TF_STACK_REGION="${TF_STACK_REGION:-ap-northeast-2}"
+ALLOWED_IPS=""
 TF_STACK_NAME="${TF_STACK_NAME:-}"
 AWS_REGION="${TF_STACK_REGION}"
 ENVIRONMENT="prod"
@@ -142,6 +143,7 @@ while [[ $# -gt 0 ]]; do
         --certificate-arn) CERTIFICATE_ARN="$2"; shift 2 ;;
         --infracost-key) INFRACOST_KEY="$2"; shift 2 ;;
         --slack-webhook) SLACK_WEBHOOK="$2"; shift 2 ;;
+        --allowed-ips) ALLOWED_IPS="$2"; shift 2 ;;
         --dry-run) DRY_RUN=true; shift ;;
         --help) show_help; exit 0 ;;
         *) echo "Unknown option: $1"; show_help; exit 1 ;;
@@ -219,6 +221,9 @@ echo "고급 기능:"
 echo "  Infracost: $([ -n "$INFRACOST_KEY" ] || [ -n "$INFRACOST_API_KEY" ] && echo "활성화" || echo "비활성화")"
 echo "  Slack 알림: $([ -n "$SLACK_WEBHOOK" ] || [ -n "$SLACK_WEBHOOK_URL" ] && echo "활성화" || echo "비활성화")"
 echo "  Dry Run: $DRY_RUN"
+echo ""
+echo "보안 설정:"
+echo "  허용 IP: ${ALLOWED_IPS:-"모든 IP (0.0.0.0/0)"}"
 echo ""
 
 if [[ "$DRY_RUN" == false ]]; then
@@ -427,6 +432,9 @@ certificate_arn = "${CERTIFICATE_ARN}"
 
 # 고급 기능
 enable_infracost = $([ -n "$INFRACOST_KEY" ] || [ -n "$INFRACOST_API_KEY" ] && echo "true" || echo "false")
+
+# 보안 설정
+allowed_cidr_blocks = [$([ -n "$ALLOWED_IPS" ] && echo "\"${ALLOWED_IPS//,/\", \"}\"")]
 HCL
 
 log_success "Terraform 설정 파일 생성 완료"
