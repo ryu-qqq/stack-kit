@@ -254,23 +254,3 @@ ATLANTIS_LOG_LEVEL=debug
 TF_LOG=DEBUG
 ```
 
-## 기여하기
-
-1. 새로운 애드온 개발
-2. 거버넌스 정책 개선
-3. 템플릿 기능 확장
-4. 문서화 개선
-
-## 지원
-
-- 📚 [StackKit 문서](https://github.com/company/stackkit-terraform-modules)
-- 🐛 [이슈 리포트](https://github.com/company/stackkit-terraform-modules/issues)
-- 💬 팀 Slack: #infrastructure
-
----
-
-**Version**: 2.0.0  
-**마지막 업데이트**: 2024-09-11  
-**관리팀**: StackKit Platform Team
-
-🚀 **즉시 배포 가능한 엔터프라이즈급 인프라 자동화**
