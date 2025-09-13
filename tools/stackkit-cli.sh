@@ -19,8 +19,8 @@ log_warning() { echo -e "${YELLOW}⚠️  $1${NC}"; }
 log_header() { echo -e "${PURPLE}🚀 $1${NC}"; }
 
 # Default values
-STACKKIT_MODULES_REPO="https://github.com/company/stackkit-terraform-modules.git"
-STACKKIT_TEMPLATES_REPO="https://github.com/company/stackkit-templates.git"
+STACKKIT_MODULES_REPO="https://github.com/stackkit/stackkit-terraform-modules.git"
+STACKKIT_TEMPLATES_REPO="https://github.com/stackkit/stackkit-templates.git"
 DEFAULT_REGION="ap-northeast-2"
 DEFAULT_ENVIRONMENTS="dev,staging,prod"
 
@@ -171,28 +171,23 @@ EOF
     # Check for local templates first
     SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
     TEMPLATES_DIR="$(dirname "$SCRIPT_DIR")/templates"
-    
+
     if [[ -d "$TEMPLATES_DIR/$template" ]]; then
         log_info "Using local template: $template"
         mkdir -p "$output_dir"
         cp -r "$TEMPLATES_DIR/$template/"* "$output_dir/"
+        # Copy hidden files as well
+        cp -r "$TEMPLATES_DIR/$template/".* "$output_dir/" 2>/dev/null || true
         cd "$output_dir"
         git init
-    elif command -v gh &> /dev/null; then
-        log_info "Using GitHub CLI to create from template..."
-        gh repo create "$project_name-infrastructure" \
-            --template "$STACKKIT_TEMPLATES_REPO/$template" \
-            --clone \
-            --private
-        
-        cd "$project_name-infrastructure"
+        log_success "Template copied successfully"
     else
-        log_warning "GitHub CLI not found. Cloning template manually..."
-        git clone "$STACKKIT_TEMPLATES_REPO" temp-templates
-        cp -r "temp-templates/$template" "$output_dir"
-        rm -rf temp-templates
-        cd "$output_dir"
-        git init
+        log_error "Template '$template' not found in $TEMPLATES_DIR. Available templates:"
+        if [[ -d "$TEMPLATES_DIR" ]]; then
+            ls -1 "$TEMPLATES_DIR" | sed 's/^/  - /'
+        else
+            log_error "Templates directory not found: $TEMPLATES_DIR"
+        fi
     fi
 
     # Customize template with project values
@@ -748,12 +743,295 @@ EOF
     esac
 }
 
+# Manage addons
+cmd_addon() {
+    local action="$1"
+    shift
+
+    case "$action" in
+        add)
+            cmd_addon_add "$@"
+            ;;
+        remove)
+            cmd_addon_remove "$@"
+            ;;
+        list)
+            cmd_addon_list "$@"
+            ;;
+        *)
+            cat << EOF
+Manage project addons
+
+Usage: $0 addon <action> [options]
+
+Actions:
+    add ADDON_PATH [PROJECT]     Add addon to project
+    remove ADDON_NAME [PROJECT]  Remove addon from project
+    list [PROJECT]               List available or installed addons
+
+Examples:
+    $0 addon add database/mysql-rds my-project
+    $0 addon list
+    $0 addon remove mysql-rds my-project
+EOF
+            ;;
+    esac
+}
+
+# Add addon to project
+cmd_addon_add() {
+    local addon_path=""
+    local project_dir="."
+
+    while [[ $# -gt 0 ]]; do
+        case $1 in
+            --help)
+                cat << EOF
+Add addon to project
+
+Usage: $0 addon add ADDON_PATH [PROJECT_DIR]
+
+Arguments:
+    ADDON_PATH      Path to addon (e.g., database/mysql-rds)
+    PROJECT_DIR     Target project directory (default: current directory)
+
+Examples:
+    $0 addon add database/mysql-rds
+    $0 addon add messaging/sqs ./my-project
+EOF
+                return 0
+                ;;
+            *)
+                if [[ -z "$addon_path" ]]; then
+                    addon_path="$1"
+                else
+                    project_dir="$1"
+                fi
+                shift
+                ;;
+        esac
+    done
+
+    [[ -z "$addon_path" ]] && log_error "Addon path is required"
+
+    log_header "Adding addon: $addon_path"
+
+    # Find addon directory
+    SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    ADDONS_DIR="$(dirname "$SCRIPT_DIR")/addons"
+
+    if [[ ! -d "$ADDONS_DIR/$addon_path" ]]; then
+        log_error "Addon not found: $ADDONS_DIR/$addon_path"
+        log_info "Available addons:"
+        find "$ADDONS_DIR" -maxdepth 2 -type d -name "*" | grep -v "^$ADDONS_DIR$" | sed "s|$ADDONS_DIR/||" | sort
+        return 1
+    fi
+
+    # Check if project directory exists and has terraform files
+    if [[ ! -d "$project_dir" ]]; then
+        log_error "Project directory not found: $project_dir"
+    fi
+
+    if [[ ! -f "$project_dir/main.tf" ]] && [[ ! -f "$project_dir/variables.tf" ]]; then
+        log_warning "No Terraform files found in $project_dir. This might not be a StackKit project."
+        read -p "Continue anyway? (y/N): " confirm
+        [[ "$confirm" != "y" ]] && [[ "$confirm" != "Y" ]] && return 0
+    fi
+
+    cd "$project_dir"
+
+    # Copy addon files
+    log_info "Copying addon files..."
+    addon_name=$(basename "$addon_path")
+
+    # Create addon-specific directory
+    mkdir -p "addons/$addon_name"
+    cp -r "$ADDONS_DIR/$addon_path/"* "addons/$addon_name/"
+
+    # Update main.tf to include the addon module
+    log_info "Updating main.tf to include addon..."
+
+    cat >> main.tf << EOF
+
+# ======================================
+# Addon: $addon_name
+# ======================================
+module "$addon_name" {
+  source = "./addons/$addon_name"
+
+  # Project metadata
+  project_name = var.project_name
+  environment  = var.environment
+  team         = var.team
+  organization = var.organization
+
+  # Basic configuration - customize as needed
+  # Add specific variables for this addon here
+}
+EOF
+
+    # Copy variables if they exist
+    if [[ -f "$ADDONS_DIR/$addon_path/variables.tf" ]]; then
+        log_info "Adding addon variables..."
+        echo "" >> variables.tf
+        echo "# ======================================" >> variables.tf
+        echo "# Addon Variables: $addon_name" >> variables.tf
+        echo "# ======================================" >> variables.tf
+        cat "$ADDONS_DIR/$addon_path/variables.tf" >> variables.tf
+    fi
+
+    # Add outputs if they exist
+    if [[ -f "$ADDONS_DIR/$addon_path/outputs.tf" ]]; then
+        log_info "Adding addon outputs..."
+        echo "" >> outputs.tf
+        echo "# ======================================" >> outputs.tf
+        echo "# Addon Outputs: $addon_name" >> outputs.tf
+        echo "# ======================================" >> outputs.tf
+        cat "$ADDONS_DIR/$addon_path/outputs.tf" >> outputs.tf
+    fi
+
+    log_success "Addon '$addon_name' added successfully!"
+    log_info "Next steps:"
+    echo "  1. Review and customize the addon configuration in main.tf"
+    echo "  2. Update terraform.tfvars with addon-specific variables"
+    echo "  3. Run: terraform init"
+    echo "  4. Run: terraform plan"
+}
+
+# Remove addon from project
+cmd_addon_remove() {
+    local addon_name=""
+    local project_dir="."
+
+    while [[ $# -gt 0 ]]; do
+        case $1 in
+            --help)
+                cat << EOF
+Remove addon from project
+
+Usage: $0 addon remove ADDON_NAME [PROJECT_DIR]
+
+Arguments:
+    ADDON_NAME      Name of addon to remove
+    PROJECT_DIR     Target project directory (default: current directory)
+
+Examples:
+    $0 addon remove mysql-rds
+    $0 addon remove sqs ./my-project
+EOF
+                return 0
+                ;;
+            *)
+                if [[ -z "$addon_name" ]]; then
+                    addon_name="$1"
+                else
+                    project_dir="$1"
+                fi
+                shift
+                ;;
+        esac
+    done
+
+    [[ -z "$addon_name" ]] && log_error "Addon name is required"
+
+    log_header "Removing addon: $addon_name"
+
+    cd "$project_dir"
+
+    # Check if addon exists
+    if [[ ! -d "addons/$addon_name" ]]; then
+        log_error "Addon not found in project: $addon_name"
+        return 1
+    fi
+
+    log_warning "This will remove the addon and its configuration. Continue? (y/N)"
+    read -p "> " confirm
+    if [[ "$confirm" != "y" ]] && [[ "$confirm" != "Y" ]]; then
+        log_info "Removal cancelled"
+        return 0
+    fi
+
+    # Remove addon directory
+    rm -rf "addons/$addon_name"
+
+    # Remove module reference from main.tf (basic approach)
+    if grep -q "module \"$addon_name\"" main.tf; then
+        log_info "Removing module reference from main.tf..."
+        # Create backup
+        cp main.tf main.tf.backup
+        # Remove the module block (this is a simple approach - could be improved)
+        log_warning "Module reference found in main.tf. Please manually remove the module block for '$addon_name'"
+        log_info "Backup created: main.tf.backup"
+    fi
+
+    log_success "Addon '$addon_name' removed successfully!"
+    log_info "You may need to manually clean up variables and outputs related to this addon"
+}
+
+# List available or installed addons
+cmd_addon_list() {
+    local project_dir="."
+
+    if [[ $# -gt 0 ]] && [[ "$1" != "--help" ]]; then
+        project_dir="$1"
+    fi
+
+    if [[ $# -gt 0 ]] && [[ "$1" == "--help" ]]; then
+        cat << EOF
+List available or installed addons
+
+Usage: $0 addon list [PROJECT_DIR]
+
+Arguments:
+    PROJECT_DIR     Project directory to check (default: current directory)
+
+Examples:
+    $0 addon list
+    $0 addon list ./my-project
+EOF
+        return 0
+    fi
+
+    log_header "StackKit Addons"
+
+    # Show available addons
+    SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    ADDONS_DIR="$(dirname "$SCRIPT_DIR")/addons"
+
+    if [[ -d "$ADDONS_DIR" ]]; then
+        log_info "Available addons:"
+        find "$ADDONS_DIR" -maxdepth 2 -type d -name "*" | grep -v "^$ADDONS_DIR$" | while read addon_dir; do
+            addon_path=$(echo "$addon_dir" | sed "s|$ADDONS_DIR/||")
+            if [[ -f "$addon_dir/README.md" ]]; then
+                description=$(head -n 3 "$addon_dir/README.md" | tail -n 1 | sed 's/^# *//')
+                echo "  📦 $addon_path - $description"
+            else
+                echo "  📦 $addon_path"
+            fi
+        done
+    else
+        log_warning "Addons directory not found: $ADDONS_DIR"
+    fi
+
+    # Show installed addons if in a project
+    if [[ -d "$project_dir/addons" ]]; then
+        echo
+        log_info "Installed addons in $project_dir:"
+        for addon_dir in "$project_dir/addons"/*; do
+            if [[ -d "$addon_dir" ]]; then
+                addon_name=$(basename "$addon_dir")
+                echo "  ✅ $addon_name"
+            fi
+        done
+    fi
+}
+
 # Migrate legacy project
 cmd_migrate() {
     log_header "Migrating legacy project to StackKit v2"
     log_warning "This feature is under development"
     log_info "For now, please use the migration guide at:"
-    log_info "https://github.com/company/stackkit-terraform-modules/blob/main/docs/MIGRATION_GUIDE.md"
+    log_info "https://github.com/stackkit/stackkit-terraform-modules/blob/main/docs/MIGRATION_GUIDE.md"
 }
 
 # Main command dispatcher
@@ -772,6 +1050,9 @@ main() {
             ;;
         update)
             cmd_update "$@"
+            ;;
+        addon)
+            cmd_addon "$@"
             ;;
         migrate)
             cmd_migrate "$@"
