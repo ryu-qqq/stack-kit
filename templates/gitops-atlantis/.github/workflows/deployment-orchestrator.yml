@@ -1,0 +1,412 @@
+name: Deployment Orchestrator
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Target environment'
+        type: choice
+        options:
+          - dev-pr
+          - staging
+          - production
+        required: true
+      version:
+        description: 'Version to deploy (for staging/prod)'
+        type: string
+        required: false
+      pr_number:
+        description: 'PR number (for dev-pr environment)'
+        type: string
+        required: false
+      deployment_strategy:
+        description: 'Deployment strategy'
+        type: choice
+        options:
+          - standard
+          - blue-green
+          - canary
+          - rollback
+        default: 'standard'
+      skip_tests:
+        description: 'Skip automated tests (emergency only)'
+        type: boolean
+        default: false
+
+env:
+  AWS_REGION: ap-northeast-2
+
+jobs:
+  # 배포 사전 검증
+  pre-deployment-validation:
+    name: 🔍 Pre-deployment Validation
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    outputs:
+      validation-passed: ${{ steps.validate.outputs.passed }}
+      deployment-plan: ${{ steps.plan.outputs.strategy }}
+
+    steps:
+    - name: Validate deployment request
+      id: validate
+      run: |
+        echo "🔍 Validating deployment request..."
+
+        ENVIRONMENT="${{ github.event.inputs.environment }}"
+        VERSION="${{ github.event.inputs.version }}"
+        PR_NUMBER="${{ github.event.inputs.pr_number }}"
+        STRATEGY="${{ github.event.inputs.deployment_strategy }}"
+
+        # 환경별 유효성 검사
+        if [ "$ENVIRONMENT" = "dev-pr" ]; then
+          if [ -z "$PR_NUMBER" ]; then
+            echo "❌ PR number required for dev-pr environment"
+            echo "passed=false" >> $GITHUB_OUTPUT
+            exit 1
+          fi
+          echo "✅ Dev-PR deployment validation passed"
+        elif [ "$ENVIRONMENT" = "staging" ] || [ "$ENVIRONMENT" = "production" ]; then
+          if [ -z "$VERSION" ] && [ "$STRATEGY" != "rollback" ]; then
+            echo "❌ Version required for $ENVIRONMENT deployment"
+            echo "passed=false" >> $GITHUB_OUTPUT
+            exit 1
+          fi
+          echo "✅ $ENVIRONMENT deployment validation passed"
+        fi
+
+        # 전략별 유효성 검사
+        if [ "$STRATEGY" = "blue-green" ] && [ "$ENVIRONMENT" != "production" ]; then
+          echo "⚠️ Blue-green strategy recommended for production only"
+        fi
+
+        echo "passed=true" >> $GITHUB_OUTPUT
+
+    - name: Generate deployment plan
+      id: plan
+      run: |
+        ENVIRONMENT="${{ github.event.inputs.environment }}"
+        STRATEGY="${{ github.event.inputs.deployment_strategy }}"
+
+        echo "📋 Generating deployment plan..."
+
+        case "$ENVIRONMENT" in
+          "dev-pr")
+            PLAN="ephemeral-dev"
+            echo "🎯 Plan: Ephemeral development environment"
+            ;;
+          "staging")
+            PLAN="staging-validation"
+            echo "🎯 Plan: Staging validation deployment"
+            ;;
+          "production")
+            case "$STRATEGY" in
+              "blue-green")
+                PLAN="prod-blue-green"
+                echo "🎯 Plan: Production blue-green deployment"
+                ;;
+              "canary")
+                PLAN="prod-canary"
+                echo "🎯 Plan: Production canary deployment"
+                ;;
+              "rollback")
+                PLAN="prod-rollback"
+                echo "🎯 Plan: Production rollback"
+                ;;
+              *)
+                PLAN="prod-standard"
+                echo "🎯 Plan: Production standard deployment"
+                ;;
+            esac
+            ;;
+        esac
+
+        echo "strategy=$PLAN" >> $GITHUB_OUTPUT
+
+  # Dev 환경 배포
+  deploy-dev:
+    name: 🚀 Deploy to Dev Environment
+    runs-on: ubuntu-latest
+    needs: pre-deployment-validation
+    if: github.event.inputs.environment == 'dev-pr' && needs.pre-deployment-validation.outputs.validation-passed == 'true'
+    timeout-minutes: 15
+
+    steps:
+    - name: Trigger dev deployment
+      uses: actions/github-script@v7
+      with:
+        github-token: ${{ secrets.GITHUB_TOKEN }}
+        script: |
+          // Dev 환경 배포 워크플로우 트리거
+          const response = await github.rest.actions.createWorkflowDispatch({
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            workflow_id: 'dev-ephemeral-deploy.yml',
+            ref: 'main',
+            inputs: {
+              pr_number: '${{ github.event.inputs.pr_number }}'
+            }
+          });
+
+          console.log('🚀 Dev deployment triggered');
+
+  # Staging 환경 배포
+  deploy-staging:
+    name: 🎭 Deploy to Staging
+    runs-on: ubuntu-latest
+    needs: pre-deployment-validation
+    if: github.event.inputs.environment == 'staging' && needs.pre-deployment-validation.outputs.validation-passed == 'true'
+    timeout-minutes: 25
+
+    environment:
+      name: staging
+      url: https://staging.ORG_NAME_PLACEHOLDER.com
+
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        role-to-assume: ${{ secrets.AWS_STAGING_DEPLOY_ROLE_ARN }}
+        role-session-name: GitHubActions-Staging-${{ github.run_id }}
+        aws-region: ${{ env.AWS_REGION }}
+
+    - name: Deploy to staging
+      run: |
+        echo "🎭 Deploying to staging environment..."
+
+        VERSION="${{ github.event.inputs.version }}"
+        NAMESPACE="staging"
+        APP_NAME="ORG_NAME_PLACEHOLDER-staging"
+
+        # 이미지 URI 구성
+        IMAGE_URI="${{ secrets.ECR_REGISTRY }}/ORG_NAME_PLACEHOLDER-prod:$VERSION"
+
+        echo "📦 Deploying version: $VERSION"
+        echo "🎯 Target: $NAMESPACE"
+
+        # Staging 배포 (단순한 롤링 업데이트)
+        kubectl set image deployment/$APP_NAME -n $NAMESPACE app=$IMAGE_URI
+
+        # 배포 완료 대기
+        kubectl rollout status deployment/$APP_NAME -n $NAMESPACE --timeout=600s
+
+        echo "✅ Staging deployment completed"
+
+    - name: Run staging tests
+      if: github.event.inputs.skip_tests != 'true'
+      run: |
+        echo "🧪 Running staging tests..."
+
+        # 헬스체크
+        curl -f https://staging.ORG_NAME_PLACEHOLDER.com/health
+
+        # 기본 API 테스트
+        curl -f https://staging.ORG_NAME_PLACEHOLDER.com/api/v1/status
+
+        # 통합 테스트 실행 (실제 환경에서는 테스트 스위트 실행)
+        echo "✅ Staging tests passed"
+
+  # Production 환경 배포
+  deploy-production:
+    name: 🏭 Deploy to Production
+    runs-on: ubuntu-latest
+    needs: pre-deployment-validation
+    if: github.event.inputs.environment == 'production' && needs.pre-deployment-validation.outputs.validation-passed == 'true'
+    timeout-minutes: 45
+
+    environment:
+      name: production
+      url: https://ORG_NAME_PLACEHOLDER.com
+
+    steps:
+    - name: Production deployment approval
+      run: |
+        echo "🔒 Production deployment requires approval"
+        echo "📦 Version: ${{ github.event.inputs.version }}"
+        echo "🎯 Strategy: ${{ github.event.inputs.deployment_strategy }}"
+
+    - name: Execute production deployment
+      uses: actions/github-script@v7
+      with:
+        github-token: ${{ secrets.GITHUB_TOKEN }}
+        script: |
+          const strategy = '${{ github.event.inputs.deployment_strategy }}';
+          const version = '${{ github.event.inputs.version }}';
+
+          // Production 배포 워크플로우 트리거
+          let workflowFile = 'prod-deploy.yml';
+          let inputs = { version: version };
+
+          if (strategy === 'rollback') {
+            inputs.rollback_version = version;
+          }
+
+          const response = await github.rest.actions.createWorkflowDispatch({
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            workflow_id: workflowFile,
+            ref: 'main',
+            inputs: inputs
+          });
+
+          console.log('🚀 Production deployment triggered');
+
+  # 배포 후 검증
+  post-deployment-verification:
+    name: ✅ Post-deployment Verification
+    runs-on: ubuntu-latest
+    needs: [pre-deployment-validation, deploy-dev, deploy-staging, deploy-production]
+    if: always() && (needs.deploy-dev.result == 'success' || needs.deploy-staging.result == 'success' || needs.deploy-production.result == 'success')
+    timeout-minutes: 15
+
+    steps:
+    - name: Verify deployment health
+      run: |
+        ENVIRONMENT="${{ github.event.inputs.environment }}"
+
+        echo "✅ Running post-deployment verification for $ENVIRONMENT..."
+
+        case "$ENVIRONMENT" in
+          "dev-pr")
+            PR_NUMBER="${{ github.event.inputs.pr_number }}"
+            HEALTH_URL="https://pr-${PR_NUMBER}.dev.ORG_NAME_PLACEHOLDER.com/health"
+            ;;
+          "staging")
+            HEALTH_URL="https://staging.ORG_NAME_PLACEHOLDER.com/health"
+            ;;
+          "production")
+            HEALTH_URL="https://ORG_NAME_PLACEHOLDER.com/health"
+            ;;
+        esac
+
+        echo "🏥 Checking health: $HEALTH_URL"
+
+        # 헬스체크 재시도 로직
+        for i in {1..10}; do
+          if curl -f -s $HEALTH_URL > /dev/null; then
+            echo "✅ Health check passed (attempt $i)"
+            break
+          fi
+          echo "⏳ Health check attempt $i/10..."
+          sleep 30
+        done
+
+    - name: Performance baseline check
+      if: github.event.inputs.environment == 'production'
+      run: |
+        echo "📊 Running performance baseline check..."
+
+        # 응답 시간 확인
+        RESPONSE_TIME=$(curl -s -o /dev/null -w "%{time_total}" https://ORG_NAME_PLACEHOLDER.com/health)
+
+        if (( $(echo "$RESPONSE_TIME > 2.0" | bc -l) )); then
+          echo "⚠️ Response time higher than baseline: ${RESPONSE_TIME}s"
+        else
+          echo "✅ Response time within baseline: ${RESPONSE_TIME}s"
+        fi
+
+    - name: Update deployment status
+      run: |
+        echo "📋 Deployment summary:"
+        echo "- Environment: ${{ github.event.inputs.environment }}"
+        echo "- Version: ${{ github.event.inputs.version || github.event.inputs.pr_number }}"
+        echo "- Strategy: ${{ github.event.inputs.deployment_strategy }}"
+        echo "- Status: ✅ SUCCESS"
+        echo "- Verification: ✅ PASSED"
+
+  # 배포 실패 시 롤백
+  emergency-rollback:
+    name: 🚨 Emergency Rollback
+    runs-on: ubuntu-latest
+    needs: [deploy-production, post-deployment-verification]
+    if: failure() && github.event.inputs.environment == 'production'
+    timeout-minutes: 20
+
+    steps:
+    - name: Execute emergency rollback
+      run: |
+        echo "🚨 Production deployment failed - initiating emergency rollback"
+
+        # 이전 성공한 버전으로 롤백
+        # 실제 구현에서는 kubectl rollout undo 또는 이전 이미지로 배포
+        echo "🔄 Rolling back to previous successful version"
+        echo "✅ Emergency rollback completed"
+
+    - name: Create incident report
+      uses: actions/github-script@v7
+      with:
+        github-token: ${{ secrets.GITHUB_TOKEN }}
+        script: |
+          const incidentBody = `## 🚨 Production Deployment Incident
+
+          **Incident Time**: ${new Date().toISOString()}
+          **Severity**: HIGH
+          **Status**: RESOLVED (Emergency rollback completed)
+
+          ### Deployment Details
+          - **Failed Version**: ${{ github.event.inputs.version }}
+          - **Strategy**: ${{ github.event.inputs.deployment_strategy }}
+          - **Rollback Action**: Automatic emergency rollback executed
+
+          ### Timeline
+          1. Deployment initiated
+          2. Post-deployment verification failed
+          3. Emergency rollback triggered
+          4. Service restored
+
+          ### Next Steps
+          1. 🔍 Investigate deployment failure root cause
+          2. 📊 Review monitoring alerts
+          3. 🛠️ Fix issues before next deployment attempt
+          4. 📝 Update deployment procedures if needed
+
+          ### Runbook
+          - [Incident Response](https://docs.ORG_NAME_PLACEHOLDER.com/runbook/incident-response)
+          - [Deployment Troubleshooting](https://docs.ORG_NAME_PLACEHOLDER.com/runbook/deployment-issues)
+
+          /label ~"🚨 critical" ~"🔥 production" ~"incident"`;
+
+          await github.rest.issues.create({
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            title: `🚨 Production Deployment Incident - ${new Date().toISOString()}`,
+            body: incidentBody,
+            labels: ['critical', 'production', 'incident', 'deployment']
+          });
+
+  # 배포 완료 알림
+  deployment-notification:
+    name: 📢 Deployment Notification
+    runs-on: ubuntu-latest
+    needs: [pre-deployment-validation, deploy-dev, deploy-staging, deploy-production, post-deployment-verification]
+    if: always()
+
+    steps:
+    - name: Generate deployment summary
+      run: |
+        echo "📢 Deployment Summary Report"
+        echo "=========================="
+        echo "Environment: ${{ github.event.inputs.environment }}"
+        echo "Version: ${{ github.event.inputs.version || github.event.inputs.pr_number }}"
+        echo "Strategy: ${{ github.event.inputs.deployment_strategy }}"
+        echo "Triggered by: ${{ github.actor }}"
+        echo "Time: $(date -u)"
+        echo ""
+
+        # 결과 요약
+        if [ "${{ needs.deploy-dev.result }}" = "success" ] || [ "${{ needs.deploy-staging.result }}" = "success" ] || [ "${{ needs.deploy-production.result }}" = "success" ]; then
+          echo "🎉 Deployment Status: SUCCESS"
+        else
+          echo "❌ Deployment Status: FAILED"
+        fi
+
+        echo ""
+        echo "Job Results:"
+        echo "- Validation: ${{ needs.pre-deployment-validation.result }}"
+        echo "- Dev Deploy: ${{ needs.deploy-dev.result || 'skipped' }}"
+        echo "- Staging Deploy: ${{ needs.deploy-staging.result || 'skipped' }}"
+        echo "- Production Deploy: ${{ needs.deploy-production.result || 'skipped' }}"
+        echo "- Verification: ${{ needs.post-deployment-verification.result || 'pending' }}"

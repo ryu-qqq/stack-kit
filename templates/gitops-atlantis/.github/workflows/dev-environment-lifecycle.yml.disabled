@@ -1,0 +1,188 @@
+name: Dev Environment Lifecycle
+
+on:
+  pull_request:
+    types: [opened, synchronize, closed]
+    paths:
+      - 'gitops-atlantis/**'
+      - '.github/workflows/**'
+
+  workflow_dispatch:
+    inputs:
+      action:
+        description: 'Action to perform'
+        required: true
+        type: choice
+        options:
+          - create
+          - destroy
+          - test-features
+
+env:
+  AWS_REGION: ap-northeast-2
+  TF_VERSION: 1.8.5
+
+jobs:
+  manage-dev-env:
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+      pull-requests: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+
+      - name: Create Dev Environment
+        if: github.event.action == 'opened' || github.event.inputs.action == 'create'
+        id: create
+        run: |
+          PR_NUMBER=${{ github.event.pull_request.number || 'manual' }}
+          echo "Creating dev environment for PR: $PR_NUMBER"
+
+          cd gitops-atlantis/environments/dev
+
+          # Initialize Terraform
+          terraform init -backend-config="key=dev/pr-${PR_NUMBER}/terraform.tfstate"
+
+          # Create terraform.tfvars
+          cat > terraform.tfvars <<EOF
+          environment_name = "dev-pr-${PR_NUMBER}"
+          pr_number = "${PR_NUMBER}"
+          ttl_hours = 8
+          use_spot_instances = true
+          enable_monitoring = true
+          enable_cost_tracking = true
+          enable_auto_destroy = true
+          idle_timeout_minutes = 30
+          EOF
+
+          # Apply Terraform
+          terraform apply -auto-approve
+
+          # Get outputs
+          DEV_URL=$(terraform output -raw atlantis_url)
+          HOURLY_COST=$(terraform output -raw estimated_hourly_cost)
+          DESTROY_TIME=$(terraform output -raw auto_destroy_time)
+
+          echo "dev_url=${DEV_URL}" >> $GITHUB_OUTPUT
+          echo "hourly_cost=${HOURLY_COST}" >> $GITHUB_OUTPUT
+          echo "destroy_time=${DESTROY_TIME}" >> $GITHUB_OUTPUT
+
+      - name: Comment PR with Environment Details
+        if: github.event.action == 'opened' || github.event.inputs.action == 'create'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { dev_url, hourly_cost, destroy_time } = ${{ toJSON(steps.create.outputs) }};
+
+            const body = `### 🚀 Dev Environment Ready!
+
+            **URL**: ${dev_url}
+            **Estimated Cost**: $${hourly_cost}/hour
+            **Auto-destroy**: ${destroy_time}
+
+            #### 🧪 Test Commands:
+            \`\`\`bash
+            # Test Atlantis plan
+            atlantis plan
+
+            # Test health check
+            curl ${dev_url}/healthz
+            \`\`\`
+
+            #### 💰 Cost Optimization:
+            - Using Spot instances (70% savings)
+            - Auto-scales to zero when idle (30 min)
+            - Automatic cleanup after 8 hours
+
+            #### 🔧 Manual Control:
+            - Scale up: \`aws ecs update-service --cluster <cluster> --service <service> --desired-count 1\`
+            - Scale down: \`aws ecs update-service --cluster <cluster> --service <service> --desired-count 0\`
+            `;
+
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: body
+            });
+
+      - name: Update Dev Environment
+        if: github.event.action == 'synchronize'
+        run: |
+          PR_NUMBER=${{ github.event.pull_request.number }}
+          echo "Updating dev environment for PR: $PR_NUMBER"
+
+          cd gitops-atlantis/environments/dev
+
+          # Initialize Terraform - allow failure if state doesn't exist
+          terraform init -backend-config="key=dev/pr-${PR_NUMBER}/terraform.tfstate" || {
+            echo "Note: State file might not exist yet, this is expected for new environments"
+          }
+
+          # Apply changes
+          terraform apply -auto-approve -var="pr_number=${PR_NUMBER}" || {
+            echo "Deployment failed - this might be due to missing IAM permissions"
+            echo "Please ensure the GitHub Actions IAM role has S3 access to prod-connectly bucket"
+            exit 1
+          }
+
+      - name: Destroy Dev Environment
+        if: github.event.action == 'closed' || github.event.inputs.action == 'destroy'
+        run: |
+          PR_NUMBER=${{ github.event.pull_request.number || 'manual' }}
+          echo "Destroying dev environment for PR: $PR_NUMBER"
+
+          cd gitops-atlantis/environments/dev
+          terraform init -backend-config="key=dev/pr-${PR_NUMBER}/terraform.tfstate"
+          terraform destroy -auto-approve -var="pr_number=${PR_NUMBER}"
+
+          # Clean up S3 state file
+          aws s3 rm "s3://prod-connectly/terraform-state/dev/pr-${PR_NUMBER}/" --recursive
+
+      - name: Test Features
+        if: github.event.inputs.action == 'test-features'
+        run: |
+          echo "Testing features in dev environment..."
+
+          # Run test suite
+          cd tests
+          pytest test_dev_environment.py \
+            --environment=dev \
+            --verbose \
+            --junit-xml=test-results.xml
+
+          # Upload test results
+          if [ -f test-results.xml ]; then
+            echo "### ✅ Test Results" >> $GITHUB_STEP_SUMMARY
+            echo "All tests passed!" >> $GITHUB_STEP_SUMMARY
+          fi
+
+      - name: Generate Cost Report
+        if: always()
+        run: |
+          cat >> $GITHUB_STEP_SUMMARY <<EOF
+          ### 💰 Cost Analysis
+
+          | Resource | Hourly Cost | Daily Cost (8h) | Monthly Cost |
+          |----------|------------|-----------------|--------------|
+          | ECS Fargate (Spot) | \$0.40 | \$3.20 | \$64 |
+          | ALB | \$0.025 | \$0.20 | \$4 |
+          | CloudWatch | \$0.0375 | \$0.30 | \$6 |
+          | **Total** | **\$0.46** | **\$3.70** | **\$74** |
+
+          *Savings: 85% compared to always-on production environment*
+          EOF

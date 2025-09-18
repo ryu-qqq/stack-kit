@@ -83,29 +83,29 @@ output "cloudwatch_log_group" {
 output "connection_instructions" {
   description = "Instructions for connecting to Atlantis"
   value       = <<-EOT
-    
+
     ========================================
     Atlantis GitOps Setup Complete!
     ========================================
-    
+
     1. Access Atlantis at:
        ${var.create_route53_record ? "https://${var.atlantis_hostname}" : "http://${module.load_balancer.alb_dns_name}"}
-    
+
     2. Configure GitHub Webhook:
        - URL: ${var.atlantis_url}/events
        - Secret: (stored in Secrets Manager)
        - Events: Pull requests, Pull request reviews, Issue comments, Pushes
-    
+
     3. View logs in CloudWatch:
        Log Group: /ecs/${var.environment}-${var.project_name}
-    
+
     4. SSH into container (if needed):
        aws ecs execute-command --cluster ${module.compute.cluster_id} \
          --task <task-id> \
          --container atlantis \
          --interactive \
          --command "/bin/sh"
-    
+
     ========================================
   EOT
 }

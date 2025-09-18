@@ -66,17 +66,17 @@ output "target_group_arn" {
 
 output "ecs_cluster_name" {
   description = "Name of the ECS cluster"
-  value       = aws_ecs_cluster.atlantis.name
+  value       = aws_ecs_cluster.main.name
 }
 
 output "ecs_cluster_id" {
   description = "ID of the ECS cluster"
-  value       = aws_ecs_cluster.atlantis.id
+  value       = aws_ecs_cluster.main.id
 }
 
 output "ecs_cluster_arn" {
   description = "ARN of the ECS cluster"
-  value       = aws_ecs_cluster.atlantis.arn
+  value       = aws_ecs_cluster.main.arn
 }
 
 output "ecs_service_name" {
@@ -114,12 +114,12 @@ output "efs_security_group_id" {
 
 output "ecs_execution_role_arn" {
   description = "ARN of the ECS execution role"
-  value       = aws_iam_role.ecs_execution_role.arn
+  value       = aws_iam_role.ecs_execution.arn
 }
 
 output "ecs_task_role_arn" {
   description = "ARN of the ECS task role"
-  value       = aws_iam_role.ecs_task_role.arn
+  value       = aws_iam_role.ecs_task.arn
 }
 
 # =====================================
@@ -179,17 +179,6 @@ output "cloudwatch_log_group_arn" {
 # 10. AUTO SCALING (Conditional)
 # =====================================
 
-output "autoscaling_target_arn" {
-  description = "ARN of the auto scaling target"
-  value       = var.enable_autoscaling ? aws_appautoscaling_target.ecs[0].arn : null
-}
-
-output "autoscaling_policy_cpu_arn" {
-  description = "ARN of the CPU auto scaling policy"
-  value       = var.enable_autoscaling ? aws_appautoscaling_policy.cpu[0].arn : null
-}
-
-output "autoscaling_policy_memory_arn" {
-  description = "ARN of the memory auto scaling policy"
-  value       = var.enable_autoscaling ? aws_appautoscaling_policy.memory[0].arn : null
-}
+# Auto-scaling outputs removed for MVP (auto-scaling disabled)
+# These outputs are no longer needed as auto-scaling is disabled
+# If auto-scaling is re-enabled in the future, these can be restored

@@ -10,8 +10,8 @@
 variable "project_name" {
   description = "Name of the project"
   type        = string
-  default     = "PROJECT_NAME_PLACEHOLDER"
-  
+  default     = "shared-infra"
+
   validation {
     condition     = can(regex("^[a-z0-9-]+$", var.project_name))
     error_message = "Project name must contain only lowercase letters, numbers, and hyphens."
@@ -21,7 +21,7 @@ variable "project_name" {
 variable "team" {
   description = "Team name"
   type        = string
-  default     = "TEAM_NAME_PLACEHOLDER"
+  default     = "platform"
 }
 
 variable "organization" {
@@ -33,7 +33,7 @@ variable "organization" {
 variable "environment" {
   description = "Environment name (dev/staging/prod)"
   type        = string
-  
+
   validation {
     condition     = contains(["dev", "staging", "prod"], var.environment)
     error_message = "Environment must be one of: dev, staging, prod."
@@ -43,13 +43,13 @@ variable "environment" {
 variable "cost_center" {
   description = "Cost center for billing"
   type        = string
-  default     = "TEAM_NAME_PLACEHOLDER"
+  default     = "platform"
 }
 
 variable "owner_email" {
   description = "Owner email for notifications"
   type        = string
-  default     = "TEAM_NAME_PLACEHOLDER@ORG_NAME_PLACEHOLDER.com"
+  default     = "OWNER_EMAIL_PLACEHOLDER"
 }
 
 # =====================================
@@ -59,7 +59,7 @@ variable "owner_email" {
 variable "aws_region" {
   description = "AWS region"
   type        = string
-  default     = "REGION_PLACEHOLDER"
+  default     = "ap-northeast-2"
 }
 
 # =====================================
@@ -70,7 +70,7 @@ variable "vpc_cidr" {
   description = "CIDR block for VPC"
   type        = string
   default     = "10.100.0.0/16"
-  
+
   validation {
     condition     = can(cidrhost(var.vpc_cidr, 0))
     error_message = "VPC CIDR must be a valid CIDR block."
@@ -110,7 +110,7 @@ variable "enable_nat_gateway" {
 variable "allowed_cidr_blocks" {
   description = "CIDR blocks allowed to access Atlantis"
   type        = list(string)
-  default     = ["0.0.0.0/0"]  # Should be restricted in production
+  default     = ["0.0.0.0/0"] # Should be restricted in production
 }
 
 # =====================================
@@ -127,7 +127,7 @@ variable "ecs_task_cpu" {
   description = "CPU units for ECS task (256, 512, 1024, 2048, 4096)"
   type        = string
   default     = "512"
-  
+
   validation {
     condition     = contains(["256", "512", "1024", "2048", "4096"], var.ecs_task_cpu)
     error_message = "ECS task CPU must be one of: 256, 512, 1024, 2048, 4096."
@@ -168,7 +168,7 @@ variable "target_cpu_utilization" {
   description = "Target CPU utilization for auto-scaling (%)"
   type        = number
   default     = 70
-  
+
   validation {
     condition     = var.target_cpu_utilization >= 10 && var.target_cpu_utilization <= 90
     error_message = "CPU utilization must be between 10 and 90."
@@ -235,7 +235,7 @@ variable "efs_performance_mode" {
   description = "EFS performance mode"
   type        = string
   default     = "generalPurpose"
-  
+
   validation {
     condition     = contains(["generalPurpose", "maxIO"], var.efs_performance_mode)
     error_message = "EFS performance mode must be 'generalPurpose' or 'maxIO'."
@@ -246,7 +246,7 @@ variable "efs_throughput_mode" {
   description = "EFS throughput mode"
   type        = string
   default     = "bursting"
-  
+
   validation {
     condition     = contains(["bursting", "provisioned"], var.efs_throughput_mode)
     error_message = "EFS throughput mode must be 'bursting' or 'provisioned'."
@@ -257,10 +257,10 @@ variable "efs_lifecycle_policy" {
   description = "EFS lifecycle policy"
   type        = string
   default     = "AFTER_30_DAYS"
-  
+
   validation {
     condition = contains([
-      "AFTER_7_DAYS", "AFTER_14_DAYS", "AFTER_30_DAYS", 
+      "AFTER_7_DAYS", "AFTER_14_DAYS", "AFTER_30_DAYS",
       "AFTER_60_DAYS", "AFTER_90_DAYS"
     ], var.efs_lifecycle_policy)
     error_message = "EFS lifecycle policy must be a valid option."
@@ -290,14 +290,58 @@ variable "secret_recovery_window_days" {
 }
 
 # =====================================
-# 8. LOGGING CONFIGURATION
+# 8. DEPLOYMENT CONFIGURATION
+# =====================================
+
+variable "deployment_strategy" {
+  description = "Deployment strategy for Atlantis service"
+  type        = string
+  default     = "rolling"
+
+  validation {
+    condition     = contains(["rolling", "blue_green"], var.deployment_strategy)
+    error_message = "Deployment strategy must be 'rolling' or 'blue_green'."
+  }
+}
+
+variable "enable_ecs_exec" {
+  description = "Enable ECS Exec for debugging"
+  type        = bool
+  default     = false
+}
+
+variable "deployment_circuit_breaker" {
+  description = "Enable deployment circuit breaker"
+  type        = bool
+  default     = true
+}
+
+variable "deployment_rollback" {
+  description = "Enable automatic rollback on deployment failure"
+  type        = bool
+  default     = true
+}
+
+variable "active_target_group" {
+  description = "Active target group for blue/green deployment"
+  type        = string
+  default     = "blue"
+
+  validation {
+    condition     = contains(["blue", "green"], var.active_target_group)
+    error_message = "Active target group must be 'blue' or 'green'."
+  }
+}
+
+# =====================================
+# 9. LOGGING CONFIGURATION
 # =====================================
 
 variable "log_retention_days" {
   description = "CloudWatch log retention in days"
   type        = number
   default     = 7
-  
+
   validation {
     condition = contains([
       1, 3, 5, 7, 14, 30, 60, 90, 120, 150, 180, 365, 400, 545, 731, 1827, 3653
@@ -335,9 +379,9 @@ variable "atlantis_repo_allowlist" {
 }
 
 variable "atlantis_repo_config" {
-  description = "Path to Atlantis config file"
+  description = "Path to Atlantis config file (optional - leave empty to skip)"
   type        = string
-  default     = "atlantis.yaml"
+  default     = ""
 }
 
 variable "atlantis_github_user" {
@@ -355,5 +399,102 @@ variable "hide_prev_plan_comments" {
 variable "terraform_version" {
   description = "Terraform version for Atlantis"
   type        = string
-  default     = "1.5.0"
+  default     = "1.8.5"
+
+  validation {
+    condition     = can(regex("^[0-9]+\\.[0-9]+\\.[0-9]+$", var.terraform_version))
+    error_message = "Terraform version must be in semantic version format (e.g., 1.8.5)."
+  }
+}
+
+# =================================
+# NOTIFICATION CONFIGURATION
+# =================================
+
+variable "slack_webhook_url" {
+  description = "Slack webhook URL for notifications (leave empty to disable)"
+  type        = string
+  default     = ""
+  sensitive   = true
+}
+
+variable "notification_channels" {
+  description = "List of notification channels to enable"
+  type        = list(string)
+  default     = ["slack", "cloudwatch"]
+
+  validation {
+    condition = alltrue([
+      for channel in var.notification_channels : contains(["slack", "cloudwatch", "sns"], channel)
+    ])
+    error_message = "Notification channels must be one of: slack, cloudwatch, sns."
+  }
+}
+
+# =================================
+# MONITORING CONFIGURATION
+# =================================
+
+variable "enable_enhanced_monitoring" {
+  description = "Enable enhanced monitoring with custom metrics"
+  type        = bool
+  default     = true
+}
+
+variable "enable_centralized_monitoring" {
+  description = "Enable centralized multi-repository monitoring dashboard and analytics"
+  type        = bool
+  default     = true
+}
+
+variable "monitored_repositories" {
+  description = "List of repository names to monitor centrally"
+  type        = list(string)
+  default = [
+    "GITHUB_USER_PLACEHOLDER/setof-commerce",
+    "ORG_NAME_PLACEHOLDER-inc/REPO_NAME_PLACEHOLDER"
+  ]
+}
+
+variable "deployment_duration_threshold_seconds" {
+  description = "Threshold in seconds for slow deployment alarms"
+  type        = number
+  default     = 600 # 10 minutes
+
+  validation {
+    condition     = var.deployment_duration_threshold_seconds >= 60 && var.deployment_duration_threshold_seconds <= 3600
+    error_message = "Deployment duration threshold must be between 60 and 3600 seconds."
+  }
+}
+
+variable "alarm_evaluation_periods" {
+  description = "Number of periods for CloudWatch alarm evaluation"
+  type        = number
+  default     = 2
+
+  validation {
+    condition     = var.alarm_evaluation_periods >= 1 && var.alarm_evaluation_periods <= 10
+    error_message = "Alarm evaluation periods must be between 1 and 10."
+  }
+}
+
+variable "response_time_threshold" {
+  description = "Response time threshold in seconds for alerting"
+  type        = number
+  default     = 5.0
+
+  validation {
+    condition     = var.response_time_threshold > 0 && var.response_time_threshold <= 30
+    error_message = "Response time threshold must be between 0.1 and 30 seconds."
+  }
+}
+
+# =================================
+# VAULTDB SPECIFIC CONFIGURATION
+# =================================
+
+variable "enable_vaultdb_monitoring" {
+  description = "Enable VaultDB-specific monitoring and constraints"
+  type        = bool
+  default     = true
 }

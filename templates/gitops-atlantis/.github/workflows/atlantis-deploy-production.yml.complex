@@ -1,0 +1,360 @@
+name: Atlantis Production Deployment
+
+on:
+  # MVP: 자동 배포 활성화 - main 브랜치 push 시 자동 운영 배포
+  push:
+    branches: [main]
+    paths:
+      - 'gitops-atlantis/**'
+      - '.github/workflows/atlantis-*.yml'
+
+  # 수동 배포도 가능하도록 유지
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Deployment environment'
+        required: true
+        type: choice
+        default: 'prod'
+        options:
+          - prod
+      force_deploy:
+        description: 'Force deployment (bypass some checks)'
+        required: false
+        type: boolean
+        default: false
+
+# Prevent concurrent production deployments
+concurrency:
+  group: atlantis-production-deployment
+  cancel-in-progress: false
+
+env:
+  TF_VERSION: "1.8.5"
+  AWS_REGION: ap-northeast-2
+  ECR_REGISTRY: 646886795421.dkr.ecr.ap-northeast-2.amazonaws.com
+  ECR_REPOSITORY: connectly/atlantis
+  ENVIRONMENT: prod
+
+jobs:
+  # Job 1: Deployment validation (Skip for MVP automatic deployment)
+  approval-validation:
+    name: 🛡️ Deployment Validation
+    runs-on: ubuntu-latest
+    outputs:
+      should-deploy: ${{ steps.approval.outputs.should-deploy }}
+      deployment-reason: ${{ steps.approval.outputs.reason }}
+
+    steps:
+    - name: Validate Deployment
+      id: approval
+      run: |
+        echo "🛡️ Validating deployment..."
+
+        # MVP: Auto-approve for push events, manual approval for workflow_dispatch
+        if [ "${{ github.event_name }}" == "push" ]; then
+          echo "✅ Automatic deployment for MVP (triggered by push to main)"
+          echo "should-deploy=true" >> $GITHUB_OUTPUT
+          echo "reason=MVP automatic deployment on main push" >> $GITHUB_OUTPUT
+        else
+          # Manual deployment validation
+          if [ "${{ github.event.inputs.approve_deployment }}" != "true" ]; then
+            echo "❌ Manual deployment not approved!"
+            echo "Please check the '🚨 I approve this PRODUCTION deployment' checkbox to proceed."
+            echo "should-deploy=false" >> $GITHUB_OUTPUT
+            echo "reason=Deployment not approved by user" >> $GITHUB_OUTPUT
+            exit 1
+          fi
+
+          # Validate reviewer information
+          REVIEWER="${{ github.event.inputs.reviewed_by }}"
+          if [ -z "$REVIEWER" ] || [ "$REVIEWER" = "" ]; then
+            echo "❌ Reviewer information missing!"
+            echo "Please provide the GitHub username of the reviewer."
+            echo "should-deploy=false" >> $GITHUB_OUTPUT
+            echo "reason=Reviewer information missing" >> $GITHUB_OUTPUT
+            exit 1
+          fi
+
+          # Validate change description
+          DESCRIPTION="${{ github.event.inputs.change_description }}"
+          if [ -z "$DESCRIPTION" ] || [ "$DESCRIPTION" = "" ]; then
+            echo "❌ Change description missing!"
+            echo "Please provide a brief description of the changes being deployed."
+            echo "should-deploy=false" >> $GITHUB_OUTPUT
+            echo "reason=Change description missing" >> $GITHUB_OUTPUT
+            exit 1
+          fi
+
+          # Check business hours (UTC: 00:00-08:00 = KST 09:00-17:00)
+          HOUR=$(date -u +%H)
+          if [ $HOUR -ge 8 ] && [ $HOUR -lt 24 ] && [ "${{ github.event.inputs.force_deploy }}" != "true" ]; then
+            echo "⚠️ Deployment outside business hours (current UTC: ${HOUR}:00)"
+            echo "Consider using force_deploy=true for emergency deployments"
+            echo "Or delay until business hours (UTC 00:00-08:00 / KST 09:00-17:00)"
+          fi
+
+          echo "✅ Manual approval validated successfully!"
+          echo "👤 Reviewed by: $REVIEWER"
+          echo "📝 Changes: $DESCRIPTION"
+          echo "should-deploy=true" >> $GITHUB_OUTPUT
+          echo "reason=Manual approval validated" >> $GITHUB_OUTPUT
+        fi
+
+  # Job 2: Pre-deployment checks
+  pre-deployment-checks:
+    name: 🔍 Pre-Deployment Checks
+    needs: [approval-validation]
+    if: needs.approval-validation.outputs.should-deploy == 'true'
+    runs-on: ubuntu-latest
+    outputs:
+      infrastructure-changed: ${{ steps.changes.outputs.infrastructure-changed }}
+
+    permissions:
+      contents: read
+
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 50  # Get more history for better change detection
+
+    - name: Check Infrastructure Changes
+      id: changes
+      run: |
+        echo "🔍 Checking for infrastructure changes..."
+
+        # MVP: Always deploy for push events, check changes for manual deployments
+        if [ "${{ github.event_name }}" == "push" ]; then
+          echo "infrastructure-changed=true" >> $GITHUB_OUTPUT
+          echo "✅ Automatic deployment for MVP - proceeding with deployment"
+        elif [ "${{ github.event.inputs.force_deploy }}" == "true" ]; then
+          echo "infrastructure-changed=true" >> $GITHUB_OUTPUT
+          echo "⚠️ Force deployment - skipping change detection"
+          exit 0
+        else
+          # Check for infrastructure file changes in recent commits
+          CHANGED_FILES=$(git diff --name-only HEAD~5 HEAD -- gitops-atlantis/ || echo "")
+
+          if [ -z "$CHANGED_FILES" ]; then
+            echo "ℹ️ No infrastructure changes detected in recent commits"
+            echo "infrastructure-changed=false" >> $GITHUB_OUTPUT
+
+            # Check if user still wants to deploy
+            echo "::warning::No infrastructure changes detected. Proceeding due to manual approval."
+          else
+            echo "📝 Infrastructure changes detected:"
+            echo "$CHANGED_FILES"
+            echo "infrastructure-changed=true" >> $GITHUB_OUTPUT
+          fi
+        fi
+
+        echo "✅ Pre-deployment checks completed"
+
+  # Job 3: Build and prepare
+  build-preparation:
+    name: 📦 Build Preparation
+    needs: [approval-validation, pre-deployment-checks]
+    if: needs.approval-validation.outputs.should-deploy == 'true'
+    uses: ./.github/workflows/reusable-ecr.yml
+    with:
+      atlantis-version: v0.18.4
+      aws-region: ap-northeast-2
+      ecr-registry: 646886795421.dkr.ecr.ap-northeast-2.amazonaws.com
+      ecr-repository: connectly/atlantis
+    secrets:
+      aws-role-arn: ${{ secrets.AWS_ROLE_ARN }}
+
+  # Job 4: Production deployment
+  deploy-to-production:
+    name: 🚀 Deploy to Production
+    needs: [approval-validation, build-preparation]
+    if: needs.approval-validation.outputs.should-deploy == 'true' && needs.build-preparation.result == 'success'
+    uses: ./.github/workflows/reusable-terraform.yml
+    with:
+      environment: prod
+      terraform-version: 1.8.5
+      working-directory: ./gitops-atlantis
+      aws-region: ap-northeast-2
+    secrets:
+      aws-role-arn: ${{ secrets.AWS_ROLE_ARN }}
+      slack-webhook-url: ${{ secrets.SLACK_WEBHOOK_URL }}
+
+  # Job 5: Post-deployment validation
+  post-deployment-validation:
+    name: ✅ Post-Deployment Validation
+    needs: [deploy-to-production]
+    if: needs.deploy-to-production.result == 'success'
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+        role-session-name: GitHubActions-PostValidation-${{ github.run_id }}
+        aws-region: ${{ env.AWS_REGION }}
+
+    - name: Comprehensive Health Checks
+      timeout-minutes: 10
+      run: |
+        echo "🔍 Running comprehensive health checks..."
+
+        CLUSTER_NAME="prod-connectly-atlantis-cluster"
+        SERVICE_NAME="prod-connectly-atlantis-service"
+
+        # Check ECS service health
+        echo "📊 Checking ECS service status..."
+        SERVICE_STATUS=$(aws ecs describe-services \
+          --cluster $CLUSTER_NAME \
+          --services $SERVICE_NAME \
+          --region ${{ env.AWS_REGION }} \
+          --query 'services[0].{DesiredCount:desiredCount,RunningCount:runningCount,Status:status}' \
+          --output json)
+
+        echo "Service Status: $SERVICE_STATUS"
+
+        RUNNING_COUNT=$(echo $SERVICE_STATUS | jq -r '.RunningCount')
+        DESIRED_COUNT=$(echo $SERVICE_STATUS | jq -r '.DesiredCount')
+
+        if [ "$RUNNING_COUNT" != "$DESIRED_COUNT" ]; then
+          echo "⚠️ ECS service not fully healthy: $RUNNING_COUNT/$DESIRED_COUNT tasks running"
+
+          # Wait for service to stabilize
+          echo "⏳ Waiting for service to stabilize..."
+          aws ecs wait services-stable \
+            --cluster $CLUSTER_NAME \
+            --services $SERVICE_NAME \
+            --region ${{ env.AWS_REGION }} \
+            --cli-read-timeout 300 || echo "Service stabilization timeout"
+        fi
+
+        # Check ALB health
+        echo "🌐 Checking ALB health endpoint..."
+        ALB_DNS=$(aws elbv2 describe-load-balancers \
+          --names "prod-connectly-atlantis-alb" \
+          --region ${{ env.AWS_REGION }} \
+          --query 'LoadBalancers[0].DNSName' \
+          --output text)
+
+        if [ -n "$ALB_DNS" ] && [ "$ALB_DNS" != "None" ]; then
+          # Test health endpoint with retry logic
+          for i in {1..30}; do
+            HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" "http://${ALB_DNS}/healthz" || echo "000")
+
+            if [ "$HTTP_STATUS" = "200" ]; then
+              echo "✅ Health endpoint responding correctly"
+              break
+            else
+              echo "⏳ Health endpoint check $i/30 (HTTP: $HTTP_STATUS)"
+              sleep 10
+            fi
+
+            if [ $i -eq 30 ]; then
+              echo "❌ Health endpoint failed to respond after 5 minutes"
+              exit 1
+            fi
+          done
+        else
+          echo "⚠️ Could not retrieve ALB DNS name"
+        fi
+
+        echo "✅ All health checks passed!"
+
+  # Job 6: Rollback capability
+  setup-rollback:
+    name: 🔄 Setup Rollback Capability
+    needs: [deploy-to-production]
+    if: always()
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Store Deployment Information
+      run: |
+        echo "📝 Storing deployment information for potential rollback..."
+
+        # Create rollback information
+        cat > deployment-info.json << EOF
+        {
+          "deployment_id": "${{ github.run_id }}",
+          "commit_sha": "${{ github.sha }}",
+          "timestamp": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+          "triggered_by": "${{ github.actor }}",
+          "environment": "production",
+          "terraform_version": "${{ env.TF_VERSION }}",
+          "status": "${{ needs.deploy-to-production.result }}"
+        }
+        EOF
+
+        echo "Deployment info stored for rollback reference"
+        cat deployment-info.json
+
+  # Job 7: Notification and summary
+  deployment-notification:
+    name: 📢 Deployment Notification
+    needs: [deploy-to-production, post-deployment-validation]
+    if: always()
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Send Deployment Notification
+      env:
+        SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+      run: |
+        # Skip if SLACK_WEBHOOK_URL is not set
+        if [ -z "$SLACK_WEBHOOK_URL" ]; then
+          echo "ℹ️ Slack webhook not configured, skipping notification"
+          exit 0
+        fi
+
+        if [ "${{ needs.deploy-to-production.result }}" == "success" ] && [ "${{ needs.post-deployment-validation.result }}" == "success" ]; then
+          STATUS="✅ SUCCESS"
+          COLOR="good"
+          MESSAGE="Production deployment completed successfully"
+        else
+          STATUS="❌ FAILED"
+          COLOR="danger"
+          MESSAGE="Production deployment failed - immediate attention required"
+        fi
+
+        curl -X POST "$SLACK_WEBHOOK_URL" \
+          -H 'Content-Type: application/json' \
+          -d '{
+            "attachments": [{
+              "color": "'$COLOR'",
+              "title": "🚀 Production Deployment '$STATUS'",
+              "fields": [
+                {"title": "Environment", "value": "Production", "short": true},
+                {"title": "Triggered by", "value": "${{ github.actor }}", "short": true},
+                {"title": "Commit", "value": "'${{ github.sha }}'", "short": true},
+                {"title": "Run ID", "value": "'${{ github.run_id }}'", "short": true}
+              ],
+              "text": "'$MESSAGE'",
+              "footer": "GitHub Actions",
+              "ts": '$(date +%s)'
+            }]
+          }'
+
+    - name: Generate Deployment Summary
+      run: |
+        echo "# 🚀 Production Deployment Summary" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "## 📋 Deployment Results" >> $GITHUB_STEP_SUMMARY
+        echo "| Phase | Status |" >> $GITHUB_STEP_SUMMARY
+        echo "|-------|--------|" >> $GITHUB_STEP_SUMMARY
+        echo "| Pre-deployment Checks | ${{ needs.pre-deployment-checks.result || 'skipped' }} |" >> $GITHUB_STEP_SUMMARY
+        echo "| Deployment Validation | ${{ needs.approval-validation.result || 'skipped' }} |" >> $GITHUB_STEP_SUMMARY
+        echo "| Build Preparation | ${{ needs.build-preparation.result || 'skipped' }} |" >> $GITHUB_STEP_SUMMARY
+        echo "| Production Deployment | ${{ needs.deploy-to-production.result || 'skipped' }} |" >> $GITHUB_STEP_SUMMARY
+        echo "| Post-deployment Validation | ${{ needs.post-deployment-validation.result || 'skipped' }} |" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "## 📝 Deployment Details" >> $GITHUB_STEP_SUMMARY
+        echo "- **Environment**: Production" >> $GITHUB_STEP_SUMMARY
+        echo "- **Commit**: ${{ github.sha }}" >> $GITHUB_STEP_SUMMARY
+        echo "- **Triggered by**: @${{ github.actor }}" >> $GITHUB_STEP_SUMMARY
+        echo "- **Deployment ID**: ${{ github.run_id }}" >> $GITHUB_STEP_SUMMARY
+        echo "- **Terraform Version**: ${{ env.TF_VERSION }}" >> $GITHUB_STEP_SUMMARY

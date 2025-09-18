@@ -1,0 +1,194 @@
+name: Atlantis Staging Deployment
+
+on:
+  push:
+    branches: [develop, staging]
+    paths:
+      - 'gitops-atlantis/**'
+      - '.github/workflows/atlantis-*.yml'
+      - '.github/workflows/reusable-*.yml'
+  workflow_dispatch:
+    inputs:
+      atlantis_version:
+        description: 'Atlantis version to deploy'
+        required: false
+        default: 'v0.18.4'
+
+# Allow concurrent staging deployments (for testing)
+concurrency:
+  group: atlantis-staging-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  TF_VERSION: "1.8.5"
+  AWS_REGION: ap-northeast-2
+  ECR_REGISTRY: 646886795421.dkr.ecr.ap-northeast-2.amazonaws.com
+  ECR_REPOSITORY: connectly/atlantis
+  ENVIRONMENT: staging
+
+jobs:
+  # Job 1: Fast parallel build and deploy for staging
+  parallel-staging-deploy:
+    name: 🚀 Staging Deployment
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        role-to-assume: ${{ secrets.AWS_STAGING_ROLE_ARN }}
+        role-session-name: GitHubActions-Staging-${{ github.run_id }}
+        aws-region: ${{ env.AWS_REGION }}
+
+    # Parallel step 1: Build image
+    - name: Build and Push Staging Image
+      run: |
+        echo "🐳 Building staging image..."
+
+        # Login to ECR
+        aws ecr get-login-password --region ${{ env.AWS_REGION }} | \
+          docker login --username AWS --password-stdin ${{ env.ECR_REGISTRY }}
+
+        # Build with staging tag
+        STAGING_TAG="${{ github.event.inputs.atlantis_version || 'v0.18.4' }}-staging-${{ github.sha }}"
+
+        # Pull and retag for staging
+        docker pull runatlantis/atlantis:${{ github.event.inputs.atlantis_version || 'v0.18.4' }}
+        docker tag runatlantis/atlantis:${{ github.event.inputs.atlantis_version || 'v0.18.4' }} \
+          ${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:$STAGING_TAG
+
+        # Push staging image
+        docker push ${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:$STAGING_TAG
+
+        echo "IMAGE_TAG=$STAGING_TAG" >> $GITHUB_ENV
+
+    # Parallel step 2: Terraform staging deploy
+    - name: Setup Terraform
+      uses: hashicorp/setup-terraform@v3
+      with:
+        terraform_version: ${{ env.TF_VERSION }}
+        terraform_wrapper: false
+
+    - name: Terraform Init (Staging)
+      working-directory: ./gitops-atlantis
+      run: |
+        terraform init \
+          -backend-config="bucket=prod-connectly" \
+          -backend-config="key=atlantis/staging/terraform.tfstate" \
+          -backend-config="region=${{ env.AWS_REGION }}" \
+          -backend-config="dynamodb_table=prod-connectly-tf-lock"
+
+    - name: Terraform Plan (Staging)
+      working-directory: ./gitops-atlantis
+      run: |
+        # Create staging-specific variables
+        cp terraform.tfvars staging.tfvars
+
+        # Override for staging environment
+        cat >> staging.tfvars << EOF
+
+        # Staging overrides
+        environment = "staging"
+        project_name = "connectly-atlantis-staging"
+        atlantis_image = "${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:${{ env.IMAGE_TAG }}"
+        desired_count = 1
+        ecs_min_capacity = 1
+        ecs_max_capacity = 2
+        ecs_task_cpu = "256"
+        ecs_task_memory = "512"
+        enable_deletion_protection = false
+        EOF
+
+        terraform plan \
+          -var-file="staging.tfvars" \
+          -out=staging.tfplan
+
+    - name: Terraform Apply (Staging)
+      working-directory: ./gitops-atlantis
+      run: terraform apply -auto-approve staging.tfplan
+
+  # Job 2: Quick validation
+  staging-validation:
+    name: ✅ Staging Validation
+    needs: [parallel-staging-deploy]
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        role-to-assume: ${{ secrets.AWS_STAGING_ROLE_ARN }}
+        role-session-name: GitHubActions-StagingValidation-${{ github.run_id }}
+        aws-region: ${{ env.AWS_REGION }}
+
+    - name: Quick Health Check
+      timeout-minutes: 5
+      run: |
+        echo "🔍 Quick staging health check..."
+
+        CLUSTER_NAME="staging-connectly-atlantis-cluster"
+        SERVICE_NAME="staging-connectly-atlantis-service"
+
+        # Wait briefly for service
+        sleep 30
+
+        # Check service status
+        aws ecs describe-services \
+          --cluster $CLUSTER_NAME \
+          --services $SERVICE_NAME \
+          --region ${{ env.AWS_REGION }} \
+          --query 'services[0].{DesiredCount:desiredCount,RunningCount:runningCount,Status:status}'
+
+        echo "✅ Staging deployment validation completed"
+
+  # Job 3: Staging notification
+  staging-notification:
+    name: 📢 Staging Notification
+    needs: [parallel-staging-deploy, staging-validation]
+    if: always()
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Staging Summary
+      run: |
+        echo "# 🚀 Staging Deployment Summary" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "## 📋 Results" >> $GITHUB_STEP_SUMMARY
+        echo "| Component | Status |" >> $GITHUB_STEP_SUMMARY
+        echo "|-----------|--------|" >> $GITHUB_STEP_SUMMARY
+        echo "| Staging Deploy | ${{ needs.parallel-staging-deploy.result }} |" >> $GITHUB_STEP_SUMMARY
+        echo "| Validation | ${{ needs.staging-validation.result }} |" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "## 📝 Details" >> $GITHUB_STEP_SUMMARY
+        echo "- **Environment**: Staging" >> $GITHUB_STEP_SUMMARY
+        echo "- **Image Tag**: ${{ env.IMAGE_TAG }}" >> $GITHUB_STEP_SUMMARY
+        echo "- **Branch**: ${{ github.ref_name }}" >> $GITHUB_STEP_SUMMARY
+        echo "- **Commit**: ${{ github.sha }}" >> $GITHUB_STEP_SUMMARY
+
+    - name: Slack Notification (Staging)
+      if: secrets.SLACK_WEBHOOK_URL && (needs.parallel-staging-deploy.result == 'failure' || needs.staging-validation.result == 'failure')
+      run: |
+        curl -X POST ${{ secrets.SLACK_WEBHOOK_URL }} \
+          -H 'Content-Type: application/json' \
+          -d '{
+            "text": "⚠️ Staging deployment issue detected",
+            "attachments": [{
+              "color": "warning",
+              "title": "Staging Deployment Alert",
+              "fields": [
+                {"title": "Branch", "value": "${{ github.ref_name }}", "short": true},
+                {"title": "Commit", "value": "${{ github.sha }}", "short": true}
+              ]
+            }]
+          }'

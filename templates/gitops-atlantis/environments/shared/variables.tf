@@ -29,7 +29,7 @@ variable "owner" {
 
 # Shared Infrastructure Reference
 variable "use_shared_infrastructure" {
-  description = "Use connectly-shared-infrastructure instead of creating new resources"
+  description = "Use REPO_NAME_PLACEHOLDERstructure instead of creating new resources"
   type        = bool
   default     = false
 }
@@ -43,7 +43,7 @@ variable "shared_state_bucket" {
 variable "shared_state_key" {
   description = "S3 key for shared infrastructure state"
   type        = string
-  default     = "connectly-shared-infrastructure/terraform.tfstate"
+  default     = "REPO_NAME_PLACEHOLDERstructure/terraform.tfstate"
 }
 
 # Networking Configuration

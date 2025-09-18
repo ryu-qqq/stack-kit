@@ -1,0 +1,105 @@
+name: Reusable ECR Build and Push
+
+on:
+  workflow_call:
+    inputs:
+      atlantis-version:
+        required: false
+        type: string
+        default: 'v0.18.4'
+        description: 'Atlantis version'
+      aws-region:
+        required: false
+        type: string
+        default: 'ap-northeast-2'
+        description: 'AWS region'
+      ecr-registry:
+        required: true
+        type: string
+        description: 'ECR registry URL'
+      ecr-repository:
+        required: true
+        type: string
+        description: 'ECR repository name'
+    outputs:
+      image-uri:
+        description: 'Built image URI'
+        value: ${{ jobs.build.outputs.image-uri }}
+    secrets:
+      aws-role-arn:
+        required: true
+        description: 'AWS IAM role ARN for OIDC'
+
+jobs:
+  build:
+    name: 🐳 Build and Push Docker Image
+    runs-on: ubuntu-latest
+    outputs:
+      image-uri: ${{ steps.build.outputs.image-uri }}
+
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        role-to-assume: ${{ secrets.aws-role-arn }}
+        role-session-name: GitHubActions-ECRBuild-${{ github.run_id }}
+        aws-region: ${{ inputs.aws-region }}
+
+    - name: Login to Amazon ECR
+      id: login-ecr
+      uses: aws-actions/amazon-ecr-login@v2
+
+    - name: Create ECR Repository if not exists
+      run: |
+        aws ecr describe-repositories --repository-names ${{ inputs.ecr-repository }} || \
+        aws ecr create-repository \
+          --repository-name ${{ inputs.ecr-repository }} \
+          --image-scanning-configuration scanOnPush=true \
+          --encryption-configuration encryptionType=AES256 \
+          --region ${{ inputs.aws-region }}
+
+    # Setup Docker buildx for advanced caching
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+
+    - name: Build and Push Atlantis Image (Optimized)
+      id: build
+      uses: docker/build-push-action@v5
+      with:
+        context: .
+        file: |
+          # Create dynamic Dockerfile for optimization
+          FROM runatlantis/atlantis:${{ inputs.atlantis-version }}
+          LABEL org.opencontainers.image.source=https://github.com/${{ github.repository }}
+          LABEL org.opencontainers.image.revision=${{ github.sha }}
+        push: true
+        tags: |
+          ${{ inputs.ecr-registry }}/${{ inputs.ecr-repository }}:${{ inputs.atlantis-version }}-${{ github.sha }}
+          ${{ inputs.ecr-registry }}/${{ inputs.ecr-repository }}:latest
+          ${{ inputs.ecr-registry }}/${{ inputs.ecr-repository }}:${{ inputs.atlantis-version }}
+        cache-from: type=gha
+        cache-to: type=gha,mode=max
+        platforms: linux/amd64
+
+    - name: Set Output
+      run: |
+        IMAGE_TAG="${{ inputs.atlantis-version }}-${{ github.sha }}"
+        FULL_IMAGE_URI="${{ inputs.ecr-registry }}/${{ inputs.ecr-repository }}:${IMAGE_TAG}"
+        echo "image-uri=${FULL_IMAGE_URI}" >> $GITHUB_OUTPUT
+        echo "✅ Optimized build completed: ${FULL_IMAGE_URI}"
+
+    - name: Scan Image for Vulnerabilities
+      run: |
+        aws ecr start-image-scan \
+          --repository-name ${{ inputs.ecr-repository }} \
+          --image-id imageTag=${{ inputs.atlantis-version }}-${{ github.sha }} \
+          --region ${{ inputs.aws-region }}
+
+        echo "🔍 Image scan initiated. Results will be available in ECR console."

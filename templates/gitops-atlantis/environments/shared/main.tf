@@ -36,7 +36,7 @@ data "aws_availability_zones" "available" {
   state = "available"
 }
 
-# Reference to shared infrastructure (if using connectly-shared-infrastructure)
+# Reference to shared infrastructure (if using REPO_NAME_PLACEHOLDERstructure)
 data "terraform_remote_state" "shared" {
   count = var.use_shared_infrastructure ? 1 : 0
 

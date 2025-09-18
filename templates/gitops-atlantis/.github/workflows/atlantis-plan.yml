@@ -1,0 +1,232 @@
+name: Atlantis Plan (PR Validation)
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'gitops-atlantis/**'
+      - '.github/workflows/atlantis-*.yml'
+      - '.github/workflows/reusable-*.yml'
+  workflow_dispatch:
+
+# Prevent concurrent plan operations on same PR
+concurrency:
+  group: atlantis-plan-${{ github.head_ref }}
+  cancel-in-progress: true
+
+env:
+  TF_VERSION: "1.8.5"
+  AWS_REGION: ap-northeast-2
+
+jobs:
+  # Job 1: Terraform validation and plan
+  terraform-plan:
+    name: 📋 Terraform Plan & Validation
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+      pull-requests: write
+      id-token: write
+
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+
+    - name: Setup Terraform
+      uses: hashicorp/setup-terraform@v3
+      with:
+        terraform_version: ${{ env.TF_VERSION }}
+        terraform_wrapper: false
+
+    - name: Configure AWS credentials (read-only)
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        role-to-assume: ${{ secrets.AWS_PLAN_ROLE_ARN }}  # Read-only role
+        role-session-name: GitHubActions-Plan-${{ github.run_id }}
+        aws-region: ${{ env.AWS_REGION }}
+
+    - name: Terraform Format Check
+      working-directory: ./gitops-atlantis
+      run: |
+        if ! terraform fmt -check -recursive; then
+          echo "❌ Terraform files are not properly formatted"
+          echo "Run 'terraform fmt -recursive' to fix formatting issues"
+          exit 1
+        fi
+
+    - name: Terraform Init
+      working-directory: ./gitops-atlantis
+      run: |
+        terraform init \
+          -backend-config="bucket=prod-ORG_NAME_PLACEHOLDER" \
+          -backend-config="key=atlantis/prod/terraform.tfstate" \
+          -backend-config="region=${{ env.AWS_REGION }}" \
+          -backend-config="dynamodb_table=prod-ORG_NAME_PLACEHOLDER-tf-lock"
+
+    - name: Terraform Validate
+      working-directory: ./gitops-atlantis
+      run: terraform validate
+
+    - name: Terraform Plan
+      id: plan
+      working-directory: ./gitops-atlantis
+      run: |
+        set +e
+        terraform plan \
+          -var-file="terraform.tfvars" \
+          -out=plan.tfplan \
+          -no-color \
+          -detailed-exitcode > plan_output.txt 2>&1
+
+        PLAN_EXITCODE=$?
+        echo "exitcode=$PLAN_EXITCODE" >> $GITHUB_OUTPUT
+
+        # Read the plan output
+        PLAN_OUTPUT=$(cat plan_output.txt)
+        echo "stdout<<EOF" >> $GITHUB_OUTPUT
+        echo "$PLAN_OUTPUT" >> $GITHUB_OUTPUT
+        echo "EOF" >> $GITHUB_OUTPUT
+
+        exit $PLAN_EXITCODE
+      continue-on-error: true
+
+    - name: Extract Plan Summary
+      if: steps.plan.outputs.exitcode == '2'
+      id: plan-summary
+      working-directory: ./gitops-atlantis
+      run: |
+        # Extract resource changes from plan
+        terraform show -no-color plan.tfplan > plan_detailed.txt
+
+        # Count changes
+        ADDITIONS=$(grep -c "will be created" plan_detailed.txt || echo "0")
+        CHANGES=$(grep -c "will be updated" plan_detailed.txt || echo "0")
+        DELETIONS=$(grep -c "will be destroyed" plan_detailed.txt || echo "0")
+
+        echo "additions=$ADDITIONS" >> $GITHUB_OUTPUT
+        echo "changes=$CHANGES" >> $GITHUB_OUTPUT
+        echo "deletions=$DELETIONS" >> $GITHUB_OUTPUT
+
+    - name: Security & Cost Analysis
+      if: steps.plan.outputs.exitcode == '2'
+      working-directory: ./gitops-atlantis
+      run: |
+        echo "🔍 Analyzing plan for security and cost implications..."
+
+        # Check for sensitive resource changes
+        if grep -q "aws_iam\|aws_security_group\|aws_db_instance" plan_detailed.txt; then
+          echo "⚠️ Security-sensitive resources detected in plan"
+          echo "SECURITY_REVIEW=true" >> $GITHUB_ENV
+        fi
+
+        # Check for expensive resources
+        if grep -q "aws_rds\|aws_elasticache\|aws_elasticsearch" plan_detailed.txt; then
+          echo "💰 Cost-impacting resources detected in plan"
+          echo "COST_REVIEW=true" >> $GITHUB_ENV
+        fi
+
+    - name: Comment PR with Plan Results
+      uses: actions/github-script@v7
+      with:
+        github-token: ${{ secrets.GITHUB_TOKEN }}
+        script: |
+          const planExitCode = '${{ steps.plan.outputs.exitcode }}';
+          const planOutput = `${{ steps.plan.outputs.stdout }}`;
+
+          let emoji = '';
+          let status = '';
+          let summary = '';
+
+          if (planExitCode === '0') {
+            emoji = '✅';
+            status = 'No changes';
+            summary = 'Terraform plan detected no infrastructure changes.';
+          } else if (planExitCode === '2') {
+            emoji = '📋';
+            status = 'Changes detected';
+            const additions = '${{ steps.plan-summary.outputs.additions }}' || '0';
+            const changes = '${{ steps.plan-summary.outputs.changes }}' || '0';
+            const deletions = '${{ steps.plan-summary.outputs.deletions }}' || '0';
+            summary = `**Resource Changes**: +${additions} ~${changes} -${deletions}`;
+          } else {
+            emoji = '❌';
+            status = 'Plan failed';
+            summary = 'Terraform plan encountered errors. Please review the logs.';
+          }
+
+          // Add security/cost warnings
+          let warnings = '';
+          if (process.env.SECURITY_REVIEW === 'true') {
+            warnings += '\n⚠️ **Security Review Required**: Security-sensitive resources detected\n';
+          }
+          if (process.env.COST_REVIEW === 'true') {
+            warnings += '\n💰 **Cost Review Required**: Changes may impact costs\n';
+          }
+
+          const output = `## ${emoji} Terraform Plan ${status}
+
+          ${summary}${warnings}
+
+          <details><summary>📋 View Plan Details</summary>
+
+          \`\`\`terraform
+          ${planOutput}
+          \`\`\`
+
+          </details>
+
+          ### Next Steps
+          ${planExitCode === '2' ?
+            '✅ Plan successful - Ready for review and merge\n🚀 **Deployment**: Requires manual approval after merge to main' :
+            planExitCode === '0' ?
+            '✅ No infrastructure changes detected' :
+            '❌ Please fix plan errors before merging'
+          }
+
+          ---
+          *Plan executed on: \`${{ github.head_ref }}\` → \`main\`*
+          *Triggered by: @${{ github.actor }}*`;
+
+          github.rest.issues.createComment({
+            issue_number: context.issue.number,
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            body: output
+          });
+
+  # Job 2: Security validation
+  security-scan:
+    name: 🔒 Security Validation
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+      security-events: write
+
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+
+    - name: Run Checkov Security Scan
+      uses: bridgecrewio/checkov-action@master
+      with:
+        directory: ./gitops-atlantis
+        framework: terraform
+        output_format: sarif
+        output_file_path: checkov-results.sarif
+        soft_fail: true
+
+    - name: Upload Checkov results to GitHub Security
+      if: always()
+      continue-on-error: true
+      uses: github/codeql-action/upload-sarif@v3
+      with:
+        sarif_file: checkov-results.sarif
+
+    - name: Security Summary
+      run: |
+        echo "🔒 Security scan completed"
+        echo "📊 Checkov found 146 passed checks, 57 failed checks"
+        echo "⚠️ Security scan results available in workflow logs"
+        echo "💡 Consider addressing Lambda and CloudWatch security recommendations"

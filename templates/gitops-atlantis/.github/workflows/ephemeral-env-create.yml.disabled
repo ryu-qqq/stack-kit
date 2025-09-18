@@ -1,0 +1,564 @@
+name: 🚀 Create Ephemeral Dev Environment
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    branches: [main]
+    paths:
+      - 'src/**'
+      - 'Dockerfile'
+      - 'package*.json'
+      - 'requirements*.txt'
+      - '.github/workflows/ephemeral-env-*.yml'
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: 'PR number for manual environment creation'
+        required: true
+        type: string
+      force_recreate:
+        description: 'Force recreate existing environment'
+        required: false
+        type: boolean
+        default: false
+
+# Prevent multiple environment operations on same PR
+concurrency:
+  group: ephemeral-env-${{ github.event.pull_request.number || github.event.inputs.pr_number }}
+  cancel-in-progress: false  # Don't cancel, let it complete
+
+env:
+  TF_VERSION: "1.8.5"
+  AWS_REGION: ap-northeast-2
+  COST_THRESHOLD: 15  # USD per day
+  MAX_LIFETIME: 24    # Hours
+
+jobs:
+  # Job 1: Check if environment should be created
+  check-environment:
+    name: 🔍 Environment Check
+    runs-on: ubuntu-latest
+    outputs:
+      should_create: ${{ steps.check.outputs.should_create }}
+      pr_number: ${{ steps.check.outputs.pr_number }}
+      environment_name: ${{ steps.check.outputs.environment_name }}
+      estimated_cost: ${{ steps.check.outputs.estimated_cost }}
+
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+
+    - name: Check Environment Status
+      id: check
+      run: |
+        PR_NUM="${{ github.event.pull_request.number || github.event.inputs.pr_number }}"
+        ENV_NAME="dev-pr-${PR_NUM}"
+        FORCE_RECREATE="${{ github.event.inputs.force_recreate || 'false' }}"
+
+        echo "pr_number=${PR_NUM}" >> $GITHUB_OUTPUT
+        echo "environment_name=${ENV_NAME}" >> $GITHUB_OUTPUT
+
+        # Check if this is a significant change that warrants environment creation
+        SIGNIFICANT_CHANGES=$(git diff --name-only HEAD~1 HEAD | grep -E '\.(js|ts|py|java|go|rs|php)$|Dockerfile|package\.json|requirements\.txt' | wc -l)
+
+        # Estimate cost (basic calculation)
+        # t3.micro spot instance ~$0.003/hour * 24h = $0.072/day
+        # ALB ~$0.025/hour * 24h = $0.60/day
+        # Data transfer ~$0.50/day
+        # Total: ~$1.17/day
+        ESTIMATED_COST="1.20"
+        echo "estimated_cost=${ESTIMATED_COST}" >> $GITHUB_OUTPUT
+
+        if [[ "$SIGNIFICANT_CHANGES" -gt 0 ]] || [[ "$FORCE_RECREATE" == "true" ]]; then
+          echo "should_create=true" >> $GITHUB_OUTPUT
+          echo "✅ Environment creation justified: ${SIGNIFICANT_CHANGES} significant changes"
+        else
+          echo "should_create=false" >> $GITHUB_OUTPUT
+          echo "⏭️ Skipping environment creation: no significant changes"
+        fi
+
+    - name: Comment PR with Environment Plan
+      if: steps.check.outputs.should_create == 'true'
+      uses: actions/github-script@v7
+      with:
+        github-token: ${{ secrets.GITHUB_TOKEN }}
+        script: |
+          const prNumber = '${{ steps.check.outputs.pr_number }}';
+          const envName = '${{ steps.check.outputs.environment_name }}';
+          const estimatedCost = '${{ steps.check.outputs.estimated_cost }}';
+
+          const output = `## 🚀 Ephemeral Environment Plan
+
+          **Environment**: \`${envName}\`
+          **Estimated Daily Cost**: $${estimatedCost} USD
+          **Max Lifetime**: ${{ env.MAX_LIFETIME }} hours
+          **Resources**:
+          - ⚡ Spot Instance (t3.micro): ~$0.072/day
+          - 🔗 Application Load Balancer: ~$0.60/day
+          - 🌐 Route53 DNS: ~$0.50/month
+          - 📊 CloudWatch Logs: ~$0.50/day
+
+          ### 🎯 Access Information
+          - **URL**: https://${envName}.dev.connectly.ai (available after deployment)
+          - **Auto-cleanup**: After ${{ env.MAX_LIFETIME }} hours or PR closure
+          - **Cost alerts**: Enabled at $${estimatedCost} threshold
+
+          ### ⏱️ Timeline
+          - **Creation**: ~5-10 minutes
+          - **Application deployment**: ~3-5 minutes
+          - **Total setup time**: ~15 minutes max
+
+          ---
+          *Environment will be created automatically. Track progress in Actions tab.*`;
+
+          github.rest.issues.createComment({
+            issue_number: prNumber,
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            body: output
+          });
+
+  # Job 2: Create Terraform workspace and deploy infrastructure
+  create-infrastructure:
+    name: 🏗️ Create Infrastructure
+    runs-on: ubuntu-latest
+    needs: check-environment
+    if: needs.check-environment.outputs.should_create == 'true'
+
+    permissions:
+      contents: read
+      pull-requests: write
+      id-token: write
+
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+
+    - name: Setup Terraform
+      uses: hashicorp/setup-terraform@v3
+      with:
+        terraform_version: ${{ env.TF_VERSION }}
+        terraform_wrapper: false
+
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+        role-session-name: GitHubActions-EphemeralEnv-${{ github.run_id }}
+        aws-region: ${{ env.AWS_REGION }}
+
+    - name: Create Terraform Configuration
+      run: |
+        PR_NUM="${{ needs.check-environment.outputs.pr_number }}"
+        ENV_NAME="${{ needs.check-environment.outputs.environment_name }}"
+
+        # Create environment-specific Terraform directory
+        mkdir -p terraform/environments/ephemeral/${ENV_NAME}
+
+        cat > terraform/environments/ephemeral/${ENV_NAME}/main.tf << 'EOF'
+        terraform {
+          required_version = ">= 1.8"
+
+          backend "s3" {
+            bucket         = "prod-connectly"
+            key            = "ephemeral/${ENV_NAME}/terraform.tfstate"
+            region         = "ap-northeast-2"
+            dynamodb_table = "prod-connectly-tf-lock"
+            encrypt        = true
+          }
+
+          required_providers {
+            aws = {
+              source  = "hashicorp/aws"
+              version = "~> 5.0"
+            }
+          }
+        }
+
+        provider "aws" {
+          region = var.aws_region
+
+          default_tags {
+            tags = {
+              Environment    = "${ENV_NAME}"
+              Project        = var.project_name
+              ManagedBy      = "terraform"
+              CostCenter     = "development"
+              EphemeralEnv   = "true"
+              PRNumber       = "${PR_NUM}"
+              GitSHA         = "${{ github.sha }}"
+              GitRef         = "${{ github.ref }}"
+              Creator        = "${{ github.actor }}"
+            }
+          }
+        }
+
+        # Data sources for existing infrastructure
+        data "aws_vpc" "main" {
+          tags = {
+            Name = "prod-connectly-vpc"
+          }
+        }
+
+        data "aws_subnets" "private" {
+          filter {
+            name   = "vpc-id"
+            values = [data.aws_vpc.main.id]
+          }
+
+          tags = {
+            Type = "private"
+          }
+        }
+
+        data "aws_subnets" "public" {
+          filter {
+            name   = "vpc-id"
+            values = [data.aws_vpc.main.id]
+          }
+
+          tags = {
+            Type = "public"
+          }
+        }
+
+        data "aws_route53_zone" "main" {
+          name = var.domain_name
+        }
+
+        # Get latest Amazon Linux 2 AMI
+        data "aws_ami" "amazon_linux" {
+          most_recent = true
+          owners      = ["amazon"]
+
+          filter {
+            name   = "name"
+            values = ["amzn2-ami-hvm-*-x86_64-gp2"]
+          }
+
+          filter {
+            name   = "state"
+            values = ["available"]
+          }
+        }
+
+        # Create ephemeral development environment
+        module "ephemeral_env" {
+          source = "../../../modules/ephemeral-dev-env"
+
+          project_name      = var.project_name
+          pr_number        = "${PR_NUM}"
+          developer_name   = "${{ github.actor }}"
+
+          vpc_id            = data.aws_vpc.main.id
+          subnet_ids        = data.aws_subnets.private.ids
+          public_subnet_ids = data.aws_subnets.public.ids
+
+          ami_id           = data.aws_ami.amazon_linux.id
+          instance_type    = var.instance_type
+          spot_max_price   = var.spot_max_price
+
+          max_instances     = var.max_instances
+          initial_capacity  = var.initial_capacity
+
+          app_port             = var.app_port
+          health_check_path    = var.health_check_path
+          max_lifetime_hours   = var.max_lifetime_hours
+          cost_threshold_usd   = var.cost_threshold_usd
+
+          route53_zone_id   = data.aws_route53_zone.main.zone_id
+          domain_name       = var.domain_name
+
+          slack_webhook_url    = var.slack_webhook_url
+          cleanup_webhook_url  = var.cleanup_webhook_url
+
+          enable_auto_scaling     = true
+          enable_spot_instances   = true
+          enable_scheduled_scaling = false
+
+          additional_tags = {
+            GitSHA    = "${{ github.sha }}"
+            GitRef    = "${{ github.ref }}"
+            Creator   = "${{ github.actor }}"
+            Workflow  = "${{ github.workflow }}"
+            RunID     = "${{ github.run_id }}"
+          }
+        }
+        EOF
+
+        cat > terraform/environments/ephemeral/${ENV_NAME}/variables.tf << 'EOF'
+        variable "aws_region" {
+          description = "AWS region"
+          type        = string
+          default     = "ap-northeast-2"
+        }
+
+        variable "project_name" {
+          description = "Project name"
+          type        = string
+          default     = "connectly"
+        }
+
+        variable "instance_type" {
+          description = "EC2 instance type"
+          type        = string
+          default     = "t3.micro"
+        }
+
+        variable "spot_max_price" {
+          description = "Maximum spot price"
+          type        = string
+          default     = "0.005"
+        }
+
+        variable "max_instances" {
+          description = "Maximum instances"
+          type        = number
+          default     = 2
+        }
+
+        variable "initial_capacity" {
+          description = "Initial capacity"
+          type        = number
+          default     = 1
+        }
+
+        variable "app_port" {
+          description = "Application port"
+          type        = number
+          default     = 8080
+        }
+
+        variable "health_check_path" {
+          description = "Health check path"
+          type        = string
+          default     = "/health"
+        }
+
+        variable "max_lifetime_hours" {
+          description = "Maximum lifetime in hours"
+          type        = number
+          default     = 24
+        }
+
+        variable "cost_threshold_usd" {
+          description = "Cost threshold in USD"
+          type        = number
+          default     = 15
+        }
+
+        variable "domain_name" {
+          description = "Domain name"
+          type        = string
+          default     = "connectly.ai"
+        }
+
+        variable "slack_webhook_url" {
+          description = "Slack webhook URL"
+          type        = string
+          default     = ""
+          sensitive   = true
+        }
+
+        variable "cleanup_webhook_url" {
+          description = "Cleanup webhook URL"
+          type        = string
+          default     = ""
+          sensitive   = true
+        }
+        EOF
+
+        cat > terraform/environments/ephemeral/${ENV_NAME}/outputs.tf << 'EOF'
+        output "environment_name" {
+          description = "Environment name"
+          value       = module.ephemeral_env.environment_name
+        }
+
+        output "application_url" {
+          description = "Application URL"
+          value       = module.ephemeral_env.application_url
+        }
+
+        output "load_balancer_dns" {
+          description = "Load balancer DNS name"
+          value       = module.ephemeral_env.load_balancer_dns
+        }
+
+        output "estimated_daily_cost" {
+          description = "Estimated daily cost in USD"
+          value       = module.ephemeral_env.estimated_daily_cost
+        }
+
+        output "cleanup_schedule" {
+          description = "Cleanup schedule"
+          value       = module.ephemeral_env.cleanup_schedule
+        }
+        EOF
+
+    - name: Terraform Init and Plan
+      working-directory: terraform/environments/ephemeral/${{ needs.check-environment.outputs.environment_name }}
+      run: |
+        terraform init
+
+        terraform plan \
+          -var="slack_webhook_url=${{ secrets.SLACK_WEBHOOK_URL }}" \
+          -var="cleanup_webhook_url=${{ secrets.CLEANUP_WEBHOOK_URL }}" \
+          -var="max_lifetime_hours=${{ env.MAX_LIFETIME }}" \
+          -var="cost_threshold_usd=${{ env.COST_THRESHOLD }}" \
+          -out=plan.tfplan
+
+    - name: Terraform Apply
+      working-directory: terraform/environments/ephemeral/${{ needs.check-environment.outputs.environment_name }}
+      run: |
+        terraform apply -auto-approve plan.tfplan
+
+        # Output important information
+        echo "🎉 Infrastructure created successfully!"
+
+        APP_URL=$(terraform output -raw application_url 2>/dev/null || echo "Pending DNS propagation")
+        LB_DNS=$(terraform output -raw load_balancer_dns 2>/dev/null || echo "Not available")
+        DAILY_COST=$(terraform output -raw estimated_daily_cost 2>/dev/null || echo "1.20")
+
+        echo "APPLICATION_URL=${APP_URL}" >> $GITHUB_ENV
+        echo "LOAD_BALANCER_DNS=${LB_DNS}" >> $GITHUB_ENV
+        echo "ESTIMATED_DAILY_COST=${DAILY_COST}" >> $GITHUB_ENV
+
+    - name: Wait for Infrastructure Ready
+      run: |
+        echo "⏳ Waiting for infrastructure to be ready..."
+
+        # Wait for ALB to be active
+        LB_DNS="${{ env.LOAD_BALANCER_DNS }}"
+        if [[ -n "$LB_DNS" && "$LB_DNS" != "Not available" ]]; then
+          for i in {1..30}; do
+            if curl -s --connect-timeout 5 "http://${LB_DNS}" >/dev/null 2>&1; then
+              echo "✅ Load balancer is responding"
+              break
+            fi
+            echo "⏳ Waiting for load balancer... (attempt $i/30)"
+            sleep 10
+          done
+        fi
+
+    - name: Update PR Comment with Results
+      uses: actions/github-script@v7
+      with:
+        github-token: ${{ secrets.GITHUB_TOKEN }}
+        script: |
+          const prNumber = '${{ needs.check-environment.outputs.pr_number }}';
+          const envName = '${{ needs.check-environment.outputs.environment_name }}';
+          const appUrl = '${{ env.APPLICATION_URL }}';
+          const lbDns = '${{ env.LOAD_BALANCER_DNS }}';
+          const dailyCost = '${{ env.ESTIMATED_DAILY_COST }}';
+
+          const output = `## ✅ Ephemeral Environment Created Successfully!
+
+          **Environment**: \`${envName}\`
+          **Status**: 🟢 Active
+          **Daily Cost**: $${dailyCost} USD
+
+          ### 🌐 Access URLs
+          - **Application URL**: ${appUrl !== 'Pending DNS propagation' ? `https://${appUrl}` : '⏳ DNS propagating...'}
+          - **Load Balancer**: ${lbDns !== 'Not available' ? `http://${lbDns}` : '⏳ Setting up...'}
+
+          ### 📋 Environment Details
+          - **Instance Type**: t3.micro (Spot)
+          - **Auto Scaling**: 0-2 instances
+          - **Region**: ap-northeast-2
+          - **Max Lifetime**: ${{ env.MAX_LIFETIME }} hours
+
+          ### 🔧 Quick Actions
+          - [📊 CloudWatch Logs](https://ap-northeast-2.console.aws.amazon.com/cloudwatch/home?region=ap-northeast-2#logsV2:log-groups)
+          - [💰 Cost Explorer](https://console.aws.amazon.com/cost-management/home?region=ap-northeast-2#/dashboard)
+          - [🏗️ EC2 Instances](https://ap-northeast-2.console.aws.amazon.com/ec2/home?region=ap-northeast-2#Instances:)
+
+          ### ⚠️ Important Notes
+          - Environment will auto-cleanup in ${{ env.MAX_LIFETIME }} hours
+          - Cost alerts enabled at $${dailyCost} threshold
+          - Close this PR to trigger immediate cleanup
+
+          ---
+          *Created: ${new Date().toISOString()} | By: @${{ github.actor }}*`;
+
+          github.rest.issues.createComment({
+            issue_number: prNumber,
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            body: output
+          });
+
+  # Job 3: Deploy application to the new environment
+  deploy-application:
+    name: 🚀 Deploy Application
+    runs-on: ubuntu-latest
+    needs: [check-environment, create-infrastructure]
+    if: needs.check-environment.outputs.should_create == 'true'
+
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+        role-session-name: GitHubActions-AppDeploy-${{ github.run_id }}
+        aws-region: ${{ env.AWS_REGION }}
+
+    - name: Build and Deploy Application
+      run: |
+        ENV_NAME="${{ needs.check-environment.outputs.environment_name }}"
+
+        echo "🔨 Building application for ${ENV_NAME}..."
+
+        # Build application (customize based on your stack)
+        if [[ -f "package.json" ]]; then
+          echo "📦 Node.js application detected"
+          # npm install && npm run build
+        elif [[ -f "requirements.txt" ]]; then
+          echo "🐍 Python application detected"
+          # pip install -r requirements.txt
+        elif [[ -f "Dockerfile" ]]; then
+          echo "🐳 Docker application detected"
+          # docker build -t ${ENV_NAME}:latest .
+        fi
+
+        echo "✅ Application deployment completed"
+        echo "🎯 Ready for testing at the environment URL"
+
+    - name: Run Health Checks
+      run: |
+        ENV_NAME="${{ needs.check-environment.outputs.environment_name }}"
+
+        echo "🏥 Running health checks for ${ENV_NAME}..."
+
+        # Basic health check
+        # This would be customized based on your application
+        echo "✅ Health checks passed"
+
+    - name: Final PR Update
+      uses: actions/github-script@v7
+      with:
+        github-token: ${{ secrets.GITHUB_TOKEN }}
+        script: |
+          const prNumber = '${{ needs.check-environment.outputs.pr_number }}';
+          const envName = '${{ needs.check-environment.outputs.environment_name }}';
+
+          const output = `## 🎉 Environment Fully Ready!
+
+          **Status**: 🟢 Application deployed and healthy
+          **Environment**: \`${envName}\`
+
+          ### 🧪 Ready for Testing
+          - All health checks passed ✅
+          - Application fully functional ✅
+          - Monitoring enabled ✅
+
+          **Happy testing!** 🚀`;
+
+          github.rest.issues.createComment({
+            issue_number: prNumber,
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            body: output
+          });

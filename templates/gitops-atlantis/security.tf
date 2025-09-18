@@ -10,7 +10,7 @@
 resource "random_password" "webhook_secret" {
   length  = 32
   special = true
-  
+
   keepers = {
     environment = var.environment
     project     = var.project_name
@@ -25,7 +25,7 @@ resource "aws_security_group" "alb" {
   name_prefix = "${local.name_prefix}-alb-"
   description = "Security group for Atlantis Application Load Balancer"
   vpc_id      = local.vpc_id
-  
+
   # HTTP inbound (for redirect to HTTPS)
   ingress {
     description = "HTTP from allowed CIDR blocks"
@@ -34,7 +34,7 @@ resource "aws_security_group" "alb" {
     protocol    = "tcp"
     cidr_blocks = var.allowed_cidr_blocks
   }
-  
+
   # HTTPS inbound
   ingress {
     description = "HTTPS from allowed CIDR blocks"
@@ -43,7 +43,7 @@ resource "aws_security_group" "alb" {
     protocol    = "tcp"
     cidr_blocks = var.allowed_cidr_blocks
   }
-  
+
   # All outbound traffic
   egress {
     description = "All outbound traffic"
@@ -52,12 +52,12 @@ resource "aws_security_group" "alb" {
     protocol    = "-1"
     cidr_blocks = ["0.0.0.0/0"]
   }
-  
+
   tags = merge(local.common_tags, {
     Name = "${local.name_prefix}-alb-sg"
     Type = "LoadBalancer"
   })
-  
+
   lifecycle {
     create_before_destroy = true
   }
@@ -71,7 +71,7 @@ resource "aws_security_group" "ecs" {
   name_prefix = "${local.name_prefix}-ecs-"
   description = "Security group for Atlantis ECS tasks"
   vpc_id      = local.vpc_id
-  
+
   # Atlantis application port from ALB only
   ingress {
     description     = "Atlantis port from ALB"
@@ -80,7 +80,7 @@ resource "aws_security_group" "ecs" {
     protocol        = "tcp"
     security_groups = [aws_security_group.alb.id]
   }
-  
+
   # All outbound traffic (for Git operations, API calls, etc.)
   egress {
     description = "All outbound traffic"
@@ -89,12 +89,12 @@ resource "aws_security_group" "ecs" {
     protocol    = "-1"
     cidr_blocks = ["0.0.0.0/0"]
   }
-  
+
   tags = merge(local.common_tags, {
     Name = "${local.name_prefix}-ecs-sg"
     Type = "Container"
   })
-  
+
   lifecycle {
     create_before_destroy = true
   }
@@ -106,11 +106,11 @@ resource "aws_security_group" "ecs" {
 
 resource "aws_security_group" "efs" {
   count = var.enable_efs ? 1 : 0
-  
+
   name_prefix = "${local.name_prefix}-efs-"
   description = "Security group for Atlantis EFS file system"
   vpc_id      = local.vpc_id
-  
+
   # NFS from ECS tasks only
   ingress {
     description     = "NFS from ECS tasks"
@@ -119,13 +119,13 @@ resource "aws_security_group" "efs" {
     protocol        = "tcp"
     security_groups = [aws_security_group.ecs.id]
   }
-  
+
   # No outbound rules needed for EFS
   tags = merge(local.common_tags, {
     Name = "${local.name_prefix}-efs-sg"
     Type = "Storage"
   })
-  
+
   lifecycle {
     create_before_destroy = true
   }
@@ -137,7 +137,7 @@ resource "aws_security_group" "efs" {
 
 resource "aws_iam_role" "ecs_execution" {
   name = "${local.name_prefix}-ecs-execution-role"
-  
+
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
     Statement = [
@@ -150,7 +150,7 @@ resource "aws_iam_role" "ecs_execution" {
       }
     ]
   })
-  
+
   tags = merge(local.common_tags, {
     Name = "${local.name_prefix}-ecs-execution-role"
     Type = "ExecutionRole"
@@ -167,7 +167,7 @@ resource "aws_iam_role_policy_attachment" "ecs_execution_policy" {
 resource "aws_iam_role_policy" "ecs_execution_secrets" {
   name = "${local.name_prefix}-execution-secrets-policy"
   role = aws_iam_role.ecs_execution.id
-  
+
   policy = jsonencode({
     Version = "2012-10-17"
     Statement = [
@@ -203,7 +203,7 @@ resource "aws_iam_role_policy" "ecs_execution_secrets" {
 
 resource "aws_iam_role" "ecs_task" {
   name = "${local.name_prefix}-ecs-task-role"
-  
+
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
     Statement = [
@@ -216,7 +216,7 @@ resource "aws_iam_role" "ecs_task" {
       }
     ]
   })
-  
+
   tags = merge(local.common_tags, {
     Name = "${local.name_prefix}-ecs-task-role"
     Type = "TaskRole"
@@ -226,10 +226,10 @@ resource "aws_iam_role" "ecs_task" {
 # Terraform state bucket access (conditional)
 resource "aws_iam_role_policy" "terraform_state_access" {
   count = var.create_terraform_state_bucket ? 1 : 0
-  
+
   name = "${local.name_prefix}-terraform-state-policy"
   role = aws_iam_role.ecs_task.id
-  
+
   policy = jsonencode({
     Version = "2012-10-17"
     Statement = [
@@ -258,10 +258,10 @@ resource "aws_iam_role_policy" "terraform_state_access" {
 # DynamoDB lock table access (conditional)
 resource "aws_iam_role_policy" "terraform_lock_access" {
   count = var.create_terraform_lock_table ? 1 : 0
-  
+
   name = "${local.name_prefix}-terraform-lock-policy"
   role = aws_iam_role.ecs_task.id
-  
+
   policy = jsonencode({
     Version = "2012-10-17"
     Statement = [
@@ -283,7 +283,7 @@ resource "aws_iam_role_policy" "terraform_lock_access" {
 resource "aws_iam_role_policy" "atlantis_infrastructure" {
   name = "${local.name_prefix}-atlantis-infrastructure-policy"
   role = aws_iam_role.ecs_task.id
-  
+
   policy = jsonencode({
     Version = "2012-10-17"
     Statement = [
@@ -315,7 +315,7 @@ resource "aws_iam_role_policy" "atlantis_infrastructure" {
           "ec2:ReleaseAddress",
           "ec2:AssociateAddress",
           "ec2:DisassociateAddress",
-          
+
           # Security Groups
           "ec2:CreateSecurityGroup",
           "ec2:DeleteSecurityGroup",
@@ -324,12 +324,12 @@ resource "aws_iam_role_policy" "atlantis_infrastructure" {
           "ec2:RevokeSecurityGroupIngress",
           "ec2:RevokeSecurityGroupEgress",
           "ec2:ModifySecurityGroupRules",
-          
+
           # Key Pairs
           "ec2:CreateKeyPair",
           "ec2:DeleteKeyPair",
           "ec2:ImportKeyPair",
-          
+
           # Instances
           "ec2:RunInstances",
           "ec2:TerminateInstances",
@@ -337,47 +337,47 @@ resource "aws_iam_role_policy" "atlantis_infrastructure" {
           "ec2:StopInstances",
           "ec2:RebootInstances",
           "ec2:ModifyInstanceAttribute",
-          
+
           # Load Balancers
           "elasticloadbalancing:*",
-          
+
           # Auto Scaling
           "autoscaling:*",
-          
+
           # ECS
           "ecs:*",
-          
+
           # CloudWatch
           "cloudwatch:*",
           "logs:*",
-          
+
           # Route 53
           "route53:*",
-          
+
           # ACM
           "acm:*",
-          
+
           # Secrets Manager
           "secretsmanager:*",
-          
+
           # KMS
           "kms:*",
-          
+
           # Systems Manager
           "ssm:*",
-          
+
           # S3
           "s3:*",
-          
+
           # DynamoDB
           "dynamodb:*",
-          
+
           # Lambda
           "lambda:*",
-          
+
           # SNS
           "sns:*",
-          
+
           # SQS
           "sqs:*"
         ]
@@ -419,13 +419,13 @@ resource "aws_iam_role_policy" "atlantis_infrastructure" {
 resource "aws_iam_policy" "atlantis_permissions_boundary" {
   name        = "${local.name_prefix}-atlantis-permissions-boundary"
   description = "Permissions boundary for Atlantis-created resources"
-  
+
   policy = jsonencode({
     Version = "2012-10-17"
     Statement = [
       {
-        Effect = "Allow"
-        Action = "*"
+        Effect   = "Allow"
+        Action   = "*"
         Resource = "*"
         Condition = {
           StringLike = {
@@ -452,7 +452,7 @@ resource "aws_iam_policy" "atlantis_permissions_boundary" {
       }
     ]
   })
-  
+
   tags = local.common_tags
 }
 
@@ -464,7 +464,7 @@ resource "aws_secretsmanager_secret" "webhook_secret" {
   name                    = "atlantis/webhook-secret"
   description             = "Webhook secret for Atlantis GitHub integration"
   recovery_window_in_days = var.secret_recovery_window_days
-  
+
   tags = merge(local.common_tags, {
     Name = "${local.name_prefix}-webhook-secret"
     Type = "Secret"

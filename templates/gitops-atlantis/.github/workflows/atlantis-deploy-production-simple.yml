@@ -1,0 +1,88 @@
+name: Atlantis Production Deployment (Simple)
+
+on:
+  # MVP: main 브랜치에 Terraform 코드 변경 시 자동 배포
+  push:
+    branches: [main]
+    paths:
+      - 'gitops-atlantis/**'
+      - '.github/workflows/atlantis-*.yml'
+
+  # 수동 배포도 가능
+  workflow_dispatch:
+
+env:
+  AWS_REGION: ap-northeast-2
+  TF_VERSION: "1.8.5"
+
+jobs:
+  deploy:
+    name: 🚀 Deploy Atlantis Infrastructure
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+        role-session-name: GitHubActions-Atlantis-Deploy-${{ github.run_id }}
+        aws-region: ${{ env.AWS_REGION }}
+
+    - name: Setup Terraform
+      uses: hashicorp/setup-terraform@v3
+      with:
+        terraform_version: ${{ env.TF_VERSION }}
+
+    - name: Terraform Init
+      working-directory: ./gitops-atlantis
+      run: |
+        terraform init -reconfigure \
+          -backend-config="bucket=prod-ORG_NAME_PLACEHOLDER" \
+          -backend-config="key=terraform/atlantis/terraform.tfstate" \
+          -backend-config="region=ap-northeast-2" \
+          -backend-config="dynamodb_table=prod-ORG_NAME_PLACEHOLDER-tf-lock"
+
+    - name: Terraform Refresh State
+      working-directory: ./gitops-atlantis
+      run: |
+        # Refresh state to sync with existing resources
+        terraform refresh || echo "State refresh completed with warnings"
+
+    - name: Terraform Plan
+      working-directory: ./gitops-atlantis
+      run: |
+        terraform plan -out=tfplan
+
+    - name: Terraform Apply
+      working-directory: ./gitops-atlantis
+      run: |
+        terraform apply -auto-approve tfplan
+
+    - name: Output Summary
+      if: always()
+      working-directory: ./gitops-atlantis
+      run: |
+        echo "## 🚀 Deployment Summary" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "- **Environment**: Production" >> $GITHUB_STEP_SUMMARY
+        echo "- **Region**: ${{ env.AWS_REGION }}" >> $GITHUB_STEP_SUMMARY
+        echo "- **Terraform Version**: ${{ env.TF_VERSION }}" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+
+        if [ "${{ job.status }}" == "success" ]; then
+          echo "✅ **Status**: Deployment successful!" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Key Resources Created:" >> $GITHUB_STEP_SUMMARY
+          echo "- ECS Cluster: prod-PROJECT_NAME_PLACEHOLDER-cluster" >> $GITHUB_STEP_SUMMARY
+          echo "- ALB: prod-PROJECT_NAME_PLACEHOLDER-alb" >> $GITHUB_STEP_SUMMARY
+          echo "- ECR: ORG_NAME_PLACEHOLDER/atlantis" >> $GITHUB_STEP_SUMMARY
+        else
+          echo "❌ **Status**: Deployment failed" >> $GITHUB_STEP_SUMMARY
+        fi

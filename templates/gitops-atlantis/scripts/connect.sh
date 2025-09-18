@@ -22,8 +22,8 @@ log_header() { echo -e "${PURPLE}🚀 $1${NC}"; }
 show_banner() {
     echo -e "${CYAN}"
     cat << "EOF"
- ____  _             _    _  _ _ _     ____                            _   
-/ ___|| |_ __ _  ___| | _| |/ (_) |_  / ___|___  _ __  _ __   ___  ___| |_ 
+ ____  _             _    _  _ _ _     ____                            _
+/ ___|| |_ __ _  ___| | _| |/ (_) |_  / ___|___  _ __  _ __   ___  ___| |_
 \___ \| __/ _` |/ __| |/ / ' /| | __|| |   / _ \| '_ \| '_ \ / _ \/ __| __|
  ___) | || (_| | (__|   <| . \| | |_ | |__| (_) | | | | | | |  __/ (__| |_
 |____/ \__\__,_|\___|_|\_\_|\_\_|\__| \____\___/|_| |_|_| |_|\___|\___|\__|
@@ -252,16 +252,16 @@ if command -v sed >/dev/null 2>&1; then
         sed -i.bak "s/name: shared-infra/name: $PROJECT_NAME/" atlantis.yaml
         log_info "프로젝트 이름을 '$PROJECT_NAME'으로 업데이트"
     fi
-    
+
     # Update environment if not prod
     if [[ "$ENVIRONMENT" != "prod" ]]; then
         sed -i.bak "s/workspace: prod/workspace: $ENVIRONMENT/" atlantis.yaml
         log_info "환경을 '$ENVIRONMENT'로 업데이트"
     fi
-    
+
     # Clean up backup file
     rm -f atlantis.yaml.bak
-    
+
     log_success "Atlantis 설정 업데이트 완료"
 else
     log_warning "sed not available. Please manually update project name in atlantis.yaml"
@@ -299,21 +299,21 @@ EOF
 )
 
     log_info "GitHub 웹훅 확인 중..."
-    
+
     # Check if webhook already exists
     local existing_webhook=""
     local webhook_response
     webhook_response=$(curl -s -H "Authorization: token $GITHUB_TOKEN" \
         -H "Accept: application/vnd.github.v3+json" \
         "https://api.github.com/repos/$REPO_NAME/hooks" 2>/dev/null || echo "")
-    
+
     if [[ -n "$webhook_response" && "$webhook_response" != "null" ]]; then
         existing_webhook=$(echo "$webhook_response" | jq -r ".[] | select(.config.url == \"$webhook_url\") | .id" 2>/dev/null || echo "")
     fi
 
     if [[ -n "$existing_webhook" ]]; then
         log_info "기존 웹훅 발견 (ID: $existing_webhook). 업데이트합니다."
-        
+
         local response
         response=$(curl -s -w "\nHTTP_STATUS:%{http_code}" \
             -H "Authorization: token $GITHUB_TOKEN" \
@@ -324,7 +324,7 @@ EOF
             "https://api.github.com/repos/$REPO_NAME/hooks/$existing_webhook" 2>/dev/null || echo "")
     else
         log_info "새 웹훅을 생성합니다."
-        
+
         local response
         response=$(curl -s -w "\nHTTP_STATUS:%{http_code}" \
             -H "Authorization: token $GITHUB_TOKEN" \
@@ -374,7 +374,7 @@ setup_github_variables() {
     if [[ -n "$SLACK_WEBHOOK_URL" ]]; then
         variables["SLACK_WEBHOOK_URL"]="$SLACK_WEBHOOK_URL"
     fi
-    
+
     if [[ -n "$INFRACOST_API_KEY" ]]; then
         variables["INFRACOST_API_KEY"]="$INFRACOST_API_KEY"
     fi
@@ -382,7 +382,7 @@ setup_github_variables() {
     # Set each variable
     for var_name in "${!variables[@]}"; do
         local var_value="${variables[$var_name]}"
-        
+
         # Create or update repository variable
         local response
         response=$(curl -s -w "\nHTTP_STATUS:%{http_code}" \
@@ -392,9 +392,9 @@ setup_github_variables() {
             -X POST \
             -d "{\"name\":\"$var_name\",\"value\":\"$var_value\"}" \
             "https://api.github.com/repos/$REPO_NAME/actions/variables" 2>/dev/null || echo "")
-        
+
         local http_status=$(echo "$response" | tail -n1 | sed 's/.*://')
-        
+
         case $http_status in
             201)
                 log_success "변수 $var_name 생성됨"
@@ -408,7 +408,7 @@ setup_github_variables() {
                     -X PATCH \
                     -d "{\"name\":\"$var_name\",\"value\":\"$var_value\"}" \
                     "https://api.github.com/repos/$REPO_NAME/actions/variables/$var_name" 2>/dev/null || echo "")
-                
+
                 local update_status=$(echo "$response" | tail -n1 | sed 's/.*://')
                 if [[ "$update_status" == "204" ]]; then
                     log_success "변수 $var_name 업데이트됨"

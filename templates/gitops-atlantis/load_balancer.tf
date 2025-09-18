@@ -18,7 +18,7 @@ resource "aws_lb" "atlantis" {
   tags = local.common_tags
 }
 
-# Target Group for Atlantis service
+# Target Group for Atlantis service (standard deployment)
 resource "aws_lb_target_group" "atlantis" {
   name        = "${local.name_prefix}-tg"
   port        = var.atlantis_port
@@ -54,6 +54,84 @@ resource "aws_lb_target_group" "atlantis" {
   }
 }
 
+# Blue Target Group for Blue/Green deployment
+resource "aws_lb_target_group" "atlantis_blue" {
+  name        = "${local.name_prefix}-tg-blue"
+  port        = var.atlantis_port
+  protocol    = "HTTP"
+  vpc_id      = local.vpc_id
+  target_type = "ip"
+
+  health_check {
+    enabled             = true
+    healthy_threshold   = 2
+    unhealthy_threshold = 2
+    timeout             = 5
+    interval            = var.health_check_interval
+    path                = var.health_check_path
+    matcher             = "200"
+    protocol            = "HTTP"
+  }
+
+  deregistration_delay = 30
+
+  stickiness {
+    type            = "lb_cookie"
+    cookie_duration = 86400
+    enabled         = true
+  }
+
+  tags = merge(
+    local.common_tags,
+    {
+      Color = "blue"
+    }
+  )
+
+  lifecycle {
+    create_before_destroy = true
+  }
+}
+
+# Green Target Group for Blue/Green deployment
+resource "aws_lb_target_group" "atlantis_green" {
+  name        = "${local.name_prefix}-tg-green"
+  port        = var.atlantis_port
+  protocol    = "HTTP"
+  vpc_id      = local.vpc_id
+  target_type = "ip"
+
+  health_check {
+    enabled             = true
+    healthy_threshold   = 2
+    unhealthy_threshold = 2
+    timeout             = 5
+    interval            = var.health_check_interval
+    path                = var.health_check_path
+    matcher             = "200"
+    protocol            = "HTTP"
+  }
+
+  deregistration_delay = 30
+
+  stickiness {
+    type            = "lb_cookie"
+    cookie_duration = 86400
+    enabled         = true
+  }
+
+  tags = merge(
+    local.common_tags,
+    {
+      Color = "green"
+    }
+  )
+
+  lifecycle {
+    create_before_destroy = true
+  }
+}
+
 # HTTP Listener - redirects to HTTPS
 resource "aws_lb_listener" "http" {
   load_balancer_arn = aws_lb.atlantis.arn
@@ -61,13 +139,8 @@ resource "aws_lb_listener" "http" {
   protocol          = "HTTP"
 
   default_action {
-    type = "redirect"
-
-    redirect {
-      port        = "443"
-      protocol    = "HTTPS"
-      status_code = "HTTP_301"
-    }
+    type             = "forward"
+    target_group_arn = aws_lb_target_group.atlantis.arn
   }
 
   tags = local.common_tags

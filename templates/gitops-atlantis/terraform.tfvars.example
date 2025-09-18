@@ -7,13 +7,13 @@
 # 1. PROJECT METADATA (Required)
 # =====================================
 
-project_name = "gitops"
+project_name = "shared-infra"
 team         = "platform"
-organization = "your-company"
+organization = "connectly"
 environment  = "prod"  # dev, staging, prod
 
 cost_center = "platform-team"
-owner_email = "platform@your-company.com"
+owner_email = "platform@connectly.com"
 
 # =====================================
 # 2. AWS CONFIGURATION
@@ -109,10 +109,10 @@ log_retention_days = 7  # 1, 3, 5, 7, 14, 30, 60, 90...
 # Before deployment, create the secret:
 # aws secretsmanager create-secret --name atlantis/github-token --secret-string '{"token":"ghp_your_token"}'
 
-atlantis_host               = "atlantis.your-company.com"  # TODO: Update domain
+atlantis_host               = "atlantis.connectly.com"  # TODO: Update domain
 atlantis_port               = 4141
 atlantis_image              = "runatlantis/atlantis:latest"
-atlantis_repo_allowlist     = "github.com/your-org/*"      # TODO: Update org
+atlantis_repo_allowlist     = "github.com/connectly/*"      # TODO: Update org
 atlantis_repo_config        = "atlantis.yaml"
 atlantis_github_user        = "atlantis-bot"
 hide_prev_plan_comments     = true

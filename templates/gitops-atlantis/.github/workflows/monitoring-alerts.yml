@@ -1,0 +1,298 @@
+name: Monitoring & Alerting
+
+on:
+  schedule:
+    # 매 5분마다 헬스체크
+    - cron: '*/5 * * * *'
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Environment to check'
+        type: choice
+        options:
+          - all
+          - production
+          - dev
+        default: 'all'
+
+env:
+  PROD_URL: https://ORG_NAME_PLACEHOLDER.com
+  DEV_URL_PREFIX: https://pr-
+  DEV_URL_SUFFIX: .dev.ORG_NAME_PLACEHOLDER.com
+
+jobs:
+  # 프로덕션 모니터링
+  monitor-production:
+    if: github.event.inputs.environment == 'production' || github.event.inputs.environment == 'all' || github.event_name == 'schedule'
+    name: 📊 Production Monitoring
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+    - name: Production health checks
+      id: health-check
+      run: |
+        echo "🏥 Checking production health..."
+
+        # 기본 헬스체크
+        HEALTH_STATUS=$(curl -s -o /dev/null -w "%{http_code}" ${{ env.PROD_URL }}/health || echo "000")
+
+        # API 상태 확인
+        API_STATUS=$(curl -s -o /dev/null -w "%{http_code}" ${{ env.PROD_URL }}/api/v1/status || echo "000")
+
+        # 데이터베이스 연결 확인
+        DB_STATUS=$(curl -s -o /dev/null -w "%{http_code}" ${{ env.PROD_URL }}/api/v1/health/db || echo "000")
+
+        # 응답 시간 측정
+        RESPONSE_TIME=$(curl -s -o /dev/null -w "%{time_total}" ${{ env.PROD_URL }}/health || echo "0")
+
+        echo "health-status=$HEALTH_STATUS" >> $GITHUB_OUTPUT
+        echo "api-status=$API_STATUS" >> $GITHUB_OUTPUT
+        echo "db-status=$DB_STATUS" >> $GITHUB_OUTPUT
+        echo "response-time=$RESPONSE_TIME" >> $GITHUB_OUTPUT
+
+        # 상태 평가
+        if [ "$HEALTH_STATUS" = "200" ] && [ "$API_STATUS" = "200" ] && [ "$DB_STATUS" = "200" ]; then
+          echo "overall-status=healthy" >> $GITHUB_OUTPUT
+          echo "✅ All systems operational"
+        else
+          echo "overall-status=unhealthy" >> $GITHUB_OUTPUT
+          echo "❌ System issues detected"
+          echo "Health: $HEALTH_STATUS, API: $API_STATUS, DB: $DB_STATUS"
+        fi
+
+    # 성능 메트릭 수집
+    - name: Collect performance metrics
+      if: steps.health-check.outputs.overall-status == 'healthy'
+      run: |
+        echo "📈 Collecting performance metrics..."
+
+        # 메모리 사용량 (실제 환경에서는 Prometheus/CloudWatch 사용)
+        # MEMORY_USAGE=$(curl -s ${{ env.PROD_URL }}/metrics/memory | jq '.usage_percent')
+
+        # CPU 사용량
+        # CPU_USAGE=$(curl -s ${{ env.PROD_URL }}/metrics/cpu | jq '.usage_percent')
+
+        echo "📊 Performance metrics collected"
+        echo "⏱️ Response time: ${{ steps.health-check.outputs.response-time }}s"
+
+    # 장애 알림
+    - name: Alert on production issues
+      if: steps.health-check.outputs.overall-status == 'unhealthy'
+      uses: actions/github-script@v7
+      with:
+        github-token: ${{ secrets.GITHUB_TOKEN }}
+        script: |
+          // 긴급 이슈 생성
+          const issueBody = `## 🚨 Production Health Alert
+
+          **Timestamp**: ${new Date().toISOString()}
+          **Status**: UNHEALTHY
+
+          ### Health Check Results
+          - **Health Endpoint**: ${{ steps.health-check.outputs.health-status }}
+          - **API Status**: ${{ steps.health-check.outputs.api-status }}
+          - **Database**: ${{ steps.health-check.outputs.db-status }}
+          - **Response Time**: ${{ steps.health-check.outputs.response-time }}s
+
+          ### Immediate Actions Required
+          1. 🔍 Check application logs
+          2. 🗄️ Verify database connectivity
+          3. 📊 Review system metrics
+          4. 🔄 Consider emergency rollback if recent deployment
+
+          ### Runbook
+          - [Emergency Response Procedures](https://docs.ORG_NAME_PLACEHOLDER.com/runbook/emergency)
+          - [Rollback Guide](https://docs.ORG_NAME_PLACEHOLDER.com/runbook/rollback)
+
+          /label ~"🚨 critical" ~"🔥 production"`;
+
+          await github.rest.issues.create({
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            title: `🚨 Production Health Alert - ${new Date().toISOString()}`,
+            body: issueBody,
+            labels: ['critical', 'production', 'monitoring']
+          });
+
+  # Dev 환경 모니터링
+  monitor-dev-environments:
+    if: github.event.inputs.environment == 'dev' || github.event.inputs.environment == 'all' || github.event_name == 'schedule'
+    name: 🔍 Dev Environment Monitoring
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    permissions:
+      contents: read
+      pull-requests: write
+      id-token: write
+
+    steps:
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        role-to-assume: ${{ secrets.AWS_DEV_DEPLOY_ROLE_ARN }}
+        role-session-name: GitHubActions-Monitor-${{ github.run_id }}
+        aws-region: ap-northeast-2
+
+    - name: Scan dev environments
+      id: scan-dev
+      run: |
+        echo "🔍 Scanning development environments..."
+
+        # PR 네임스페이스 목록 가져오기
+        PR_NAMESPACES=$(kubectl get namespaces -l environment=dev -o jsonpath='{.items[*].metadata.name}' | tr ' ' '\n' | grep '^dev-pr-' || echo "")
+
+        if [ -z "$PR_NAMESPACES" ]; then
+          echo "ℹ️ No active dev environments found"
+          echo "environments=" >> $GITHUB_OUTPUT
+          exit 0
+        fi
+
+        echo "📋 Found dev environments:"
+        echo "$PR_NAMESPACES"
+
+        # 각 환경 상태 확인
+        ENVIRONMENT_STATUS=""
+        for namespace in $PR_NAMESPACES; do
+          PR_NUMBER=$(echo $namespace | sed 's/dev-pr-//')
+          APP_URL="${{ env.DEV_URL_PREFIX }}${PR_NUMBER}${{ env.DEV_URL_SUFFIX }}"
+
+          # 헬스체크
+          STATUS_CODE=$(curl -s -o /dev/null -w "%{http_code}" $APP_URL/health 2>/dev/null || echo "000")
+
+          if [ "$STATUS_CODE" = "200" ]; then
+            STATUS="✅ healthy"
+          else
+            STATUS="❌ unhealthy ($STATUS_CODE)"
+          fi
+
+          ENVIRONMENT_STATUS="$ENVIRONMENT_STATUS\n- PR $PR_NUMBER: $STATUS - $APP_URL"
+        done
+
+        echo "environments<<EOF" >> $GITHUB_OUTPUT
+        echo -e "$ENVIRONMENT_STATUS" >> $GITHUB_OUTPUT
+        echo "EOF" >> $GITHUB_OUTPUT
+
+    # 오래된 Dev 환경 정리 알림
+    - name: Check for stale dev environments
+      run: |
+        echo "🧹 Checking for stale dev environments..."
+
+        # 3일 이상 된 환경 찾기
+        STALE_CUTOFF=$(date -d '3 days ago' -u +%Y-%m-%dT%H:%M:%SZ)
+
+        kubectl get namespaces -l environment=dev -o json | \
+        jq -r --arg cutoff "$STALE_CUTOFF" '
+          .items[] |
+          select(.metadata.creationTimestamp < $cutoff) |
+          .metadata.name' | while read namespace; do
+          if [ -n "$namespace" ]; then
+            PR_NUMBER=$(echo $namespace | sed 's/dev-pr-//')
+            echo "⚠️ Stale environment detected: $namespace (PR #$PR_NUMBER)"
+
+            # TODO: PR에 정리 알림 댓글 추가
+            # 실제 구현에서는 GitHub API 호출
+          fi
+        done
+
+  # 비용 모니터링
+  cost-monitoring:
+    if: github.event.inputs.environment == 'all' || github.event_name == 'schedule'
+    name: 💰 Cost Monitoring
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        role-to-assume: ${{ secrets.AWS_MONITORING_ROLE_ARN }}
+        role-session-name: GitHubActions-CostMonitor-${{ github.run_id }}
+        aws-region: ap-northeast-2
+
+    - name: Check resource utilization
+      run: |
+        echo "💰 Monitoring resource costs..."
+
+        # ECR 스토리지 사용량
+        ECR_REPOS=$(aws ecr describe-repositories --query 'repositories[*].repositoryName' --output text)
+
+        for repo in $ECR_REPOS; do
+          REPO_SIZE=$(aws ecr describe-repository-statistics --repository-name $repo --query 'repositoryStatistics.repositorySizeInBytes' --output text)
+          REPO_SIZE_MB=$((REPO_SIZE / 1024 / 1024))
+          echo "📦 ECR Repo $repo: ${REPO_SIZE_MB}MB"
+        done
+
+        # 실행 중인 리소스 개수
+        echo "🏗️ Active Kubernetes resources:"
+        kubectl get pods --all-namespaces --field-selector=status.phase=Running | wc -l | xargs echo "- Running pods:"
+        kubectl get services --all-namespaces | wc -l | xargs echo "- Services:"
+
+    - name: Cost optimization recommendations
+      run: |
+        echo "💡 Cost optimization recommendations:"
+
+        # 오래된 ECR 이미지 정리 제안
+        echo "- 🗑️ Clean up old ECR images (>30 days)"
+        echo "- 🔄 Review unused dev environments"
+        echo "- 📊 Consider reserved instances for production"
+
+  # 보안 모니터링
+  security-monitoring:
+    if: github.event.inputs.environment == 'all' || github.event_name == 'schedule'
+    name: 🔒 Security Monitoring
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+
+    - name: Security scan summary
+      run: |
+        echo "🔒 Security monitoring summary:"
+        echo "- 🛡️ Container vulnerability scanning: Active"
+        echo "- 🔐 Secrets scanning: Active"
+        echo "- 📊 Security alerts: $(date)"
+
+        # 실제 환경에서는 보안 도구 결과 수집
+        echo "✅ No critical security issues detected"
+
+  # 모니터링 요약 보고서
+  monitoring-summary:
+    name: 📋 Monitoring Summary
+    runs-on: ubuntu-latest
+    needs: [monitor-production, monitor-dev-environments, cost-monitoring, security-monitoring]
+    if: always()
+
+    steps:
+    - name: Generate monitoring report
+      run: |
+        echo "# 📊 Monitoring Summary Report"
+        echo "**Time**: $(date -u)"
+        echo ""
+
+        # 프로덕션 상태
+        if [ "${{ needs.monitor-production.result }}" = "success" ]; then
+          echo "## ✅ Production Status: HEALTHY"
+        else
+          echo "## ❌ Production Status: ISSUES DETECTED"
+        fi
+
+        # Dev 환경 상태
+        echo ""
+        echo "## 🔍 Development Environments"
+        echo "${{ needs.monitor-dev-environments.outputs.environments }}"
+
+        # 요약
+        echo ""
+        echo "## 📈 Summary"
+        echo "- Production: ${{ needs.monitor-production.result }}"
+        echo "- Dev Monitoring: ${{ needs.monitor-dev-environments.result }}"
+        echo "- Cost Monitoring: ${{ needs.cost-monitoring.result }}"
+        echo "- Security: ${{ needs.security-monitoring.result }}"

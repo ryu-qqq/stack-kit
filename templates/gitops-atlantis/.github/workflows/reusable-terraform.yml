@@ -1,0 +1,200 @@
+name: Reusable Terraform Workflow
+
+on:
+  workflow_call:
+    inputs:
+      environment:
+        required: true
+        type: string
+        description: 'Environment to deploy (prod, staging, dev)'
+      terraform-version:
+        required: false
+        type: string
+        default: '1.8.5'
+        description: 'Terraform version to use'
+      working-directory:
+        required: false
+        type: string
+        default: './gitops-atlantis'
+        description: 'Working directory for Terraform'
+      aws-region:
+        required: false
+        type: string
+        default: 'ap-northeast-2'
+        description: 'AWS region'
+    secrets:
+      aws-role-arn:
+        required: true
+        description: 'AWS IAM role ARN for OIDC'
+      slack-webhook-url:
+        required: false
+        description: 'Slack webhook for notifications'
+
+jobs:
+  # Parallel job: Terraform plan and validation
+  terraform-plan:
+    name: 📋 Terraform Plan
+    runs-on: ubuntu-latest
+    outputs:
+      plan-output: ${{ steps.plan.outputs.stdout }}
+      plan-exitcode: ${{ steps.plan.outputs.exitcode }}
+
+    permissions:
+      contents: read
+      pull-requests: write
+      id-token: write
+
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+
+    # Cache Terraform providers and modules
+    - name: Cache Terraform
+      uses: actions/cache@v3
+      with:
+        path: |
+          ~/.terraform.d/plugin-cache
+          ${{ inputs.working-directory }}/.terraform
+        key: terraform-${{ inputs.environment }}-${{ hashFiles(format('{0}/**/*.tf', inputs.working-directory)) }}
+        restore-keys: |
+          terraform-${{ inputs.environment }}-
+          terraform-
+
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        role-to-assume: ${{ secrets.aws-role-arn }}
+        role-session-name: GitHubActions-TerraformPlan-${{ github.run_id }}
+        aws-region: ${{ inputs.aws-region }}
+
+    - name: Setup Terraform with Plugin Cache
+      uses: hashicorp/setup-terraform@v3
+      with:
+        terraform_version: ${{ inputs.terraform-version }}
+        terraform_wrapper: false
+
+    - name: Configure Terraform Plugin Cache
+      run: |
+        mkdir -p ~/.terraform.d/plugin-cache
+        echo 'plugin_cache_dir = "'$HOME'/.terraform.d/plugin-cache"' > ~/.terraformrc
+
+    - name: Terraform Init (Optimized)
+      working-directory: ${{ inputs.working-directory }}
+      run: |
+        terraform init \
+          -backend-config="bucket=prod-ORG_NAME_PLACEHOLDER" \
+          -backend-config="key=atlantis/${{ inputs.environment }}/terraform.tfstate" \
+          -backend-config="region=${{ inputs.aws-region }}" \
+          -backend-config="dynamodb_table=prod-ORG_NAME_PLACEHOLDER-tf-lock" \
+          -upgrade=false
+
+    - name: Terraform Plan (Parallel Optimized)
+      id: plan
+      working-directory: ${{ inputs.working-directory }}
+      run: |
+        set +e
+        terraform plan \
+          -var-file="terraform.tfvars" \
+          -var="environment=${{ inputs.environment }}" \
+          -out="${{ inputs.environment }}.tfplan" \
+          -no-color \
+          -detailed-exitcode \
+          -parallelism=10
+        echo "exitcode=$?" >> $GITHUB_OUTPUT
+      continue-on-error: true
+
+    - name: Comment PR with Plan
+      if: github.event_name == 'pull_request'
+      uses: actions/github-script@v7
+      with:
+        github-token: ${{ secrets.GITHUB_TOKEN }}
+        script: |
+          const output = `#### Terraform Plan 📖 \`${{ steps.plan.outcome }}\`
+
+          <details><summary>Show Plan</summary>
+
+          \`\`\`terraform
+          ${{ steps.plan.outputs.stdout }}
+          \`\`\`
+
+          </details>
+
+          *Environment: ${{ inputs.environment }}*
+          *Triggered by: @${{ github.actor }}, Workflow: \`${{ github.workflow }}\`*`;
+
+          github.rest.issues.createComment({
+            issue_number: context.issue.number,
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            body: output
+          })
+
+  terraform-apply:
+    name: 🚀 Terraform Apply
+    needs: terraform-plan
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push' && needs.terraform-plan.outputs.plan-exitcode == '2'
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        role-to-assume: ${{ secrets.aws-role-arn }}
+        role-session-name: GitHubActions-TerraformApply-${{ github.run_id }}
+        aws-region: ${{ inputs.aws-region }}
+
+    - name: Setup Terraform
+      uses: hashicorp/setup-terraform@v3
+      with:
+        terraform_version: ${{ inputs.terraform-version }}
+        terraform_wrapper: false
+
+    - name: Terraform Init
+      working-directory: ${{ inputs.working-directory }}
+      run: |
+        terraform init \
+          -backend-config="bucket=prod-ORG_NAME_PLACEHOLDER" \
+          -backend-config="key=atlantis/${{ inputs.environment }}/terraform.tfstate" \
+          -backend-config="region=${{ inputs.aws-region }}" \
+          -backend-config="dynamodb_table=prod-ORG_NAME_PLACEHOLDER-tf-lock"
+
+    - name: Create Plan for Apply
+      working-directory: ${{ inputs.working-directory }}
+      run: |
+        terraform plan \
+          -var-file="environments/${{ inputs.environment }}/terraform.tfvars" \
+          -out="${{ inputs.environment }}.tfplan"
+
+    - name: Terraform Apply
+      working-directory: ${{ inputs.working-directory }}
+      run: terraform apply -auto-approve "${{ inputs.environment }}.tfplan"
+
+    - name: Slack Notification
+      if: always() && inputs.slack-webhook-url
+      run: |
+        if [ "${{ job.status }}" == "success" ]; then
+          STATUS="✅ Success"
+          COLOR="good"
+        else
+          STATUS="❌ Failed"
+          COLOR="danger"
+        fi
+
+        curl -X POST ${{ secrets.slack-webhook-url }} \
+          -H 'Content-Type: application/json' \
+          -d '{
+            "attachments": [{
+              "color": "'$COLOR'",
+              "title": "Terraform Apply '$STATUS'",
+              "text": "Environment: ${{ inputs.environment }}\nWorkflow: ${{ github.workflow }}\nTriggered by: ${{ github.actor }}",
+              "footer": "GitHub Actions",
+              "ts": '$(date +%s)'
+            }]
+          }'

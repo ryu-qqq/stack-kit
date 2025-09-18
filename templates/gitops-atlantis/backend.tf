@@ -1,9 +1,9 @@
 terraform {
   backend "s3" {
-    bucket         = "TERRAFORM_STATE_BUCKET_PLACEHOLDER"
-    key            = "gitops/atlantis/terraform.tfstate"
-    region         = "REGION_PLACEHOLDER"
-    dynamodb_table = "terraform-state-lock"
+    bucket         = "prod-ORG_NAME_PLACEHOLDER"
+    key            = "atlantis/prod/terraform.tfstate"
+    region         = "ap-northeast-2"
+    dynamodb_table = "prod-ORG_NAME_PLACEHOLDER-tf-lock"
     encrypt        = true
   }
 }

@@ -9,24 +9,102 @@ version: 3
 automerge: false  # Safety first - manual merge for production
 delete_source_branch_on_merge: true
 
-# Projects Configuration  
+# Projects Configuration
 projects:
-- name: shared-infra
-  dir: .
-  workspace: prod
-  terraform_version: v1.7.5
+# ========================================
+# Wildcard Pattern for All Terraform Projects
+# ========================================
+# This wildcard configuration automatically detects and manages all Terraform projects
+# across any repository that Atlantis has access to, eliminating the need for
+# re-deployment when adding new projects
+
+# ========================================
+# Pattern 1: Auto-detect all Terraform directories
+# ========================================
+- name: all-terraform-auto
+  dir: "**/*"  # Matches any directory at any depth
+  workspace: default
+  terraform_version: v1.8.5
   delete_source_branch_on_merge: true
   repo_locking: true
-  
-  # Auto-planning
+
+  # Auto-planning for ANY Terraform file changes
   autoplan:
-    when_modified: ["**/*.tf", "**/*.tfvars"]
+    when_modified: ["**/*.tf", "**/*.tfvars", "**/*.hcl"]
     enabled: true
-  
-  # Requirements for apply
+
+  # Standard requirements for auto-detected projects
   apply_requirements: ["approved", "mergeable"]
-  
+
   # Use enhanced workflow with notifications and cost analysis
+  workflow: stackkit-enhanced
+
+# ========================================
+# Pattern 2: Environment-based detection
+# ========================================
+- name: auto-production
+  dir: "**/production/**"  # Any production directory
+  workspace: prod
+  terraform_version: v1.8.5
+  delete_source_branch_on_merge: true
+  repo_locking: true
+
+  autoplan:
+    when_modified: ["**/production/**/*.tf", "**/production/**/*.tfvars"]
+    enabled: true
+
+  # Stricter requirements for production
+  apply_requirements: ["approved", "mergeable", "undiverged"]
+  workflow: stackkit-enhanced
+
+- name: auto-staging
+  dir: "**/staging/**"  # Any staging directory
+  workspace: staging
+  terraform_version: v1.8.5
+  delete_source_branch_on_merge: true
+  repo_locking: true
+
+  autoplan:
+    when_modified: ["**/staging/**/*.tf", "**/staging/**/*.tfvars"]
+    enabled: true
+
+  apply_requirements: ["approved", "mergeable"]
+  workflow: stackkit-enhanced
+
+- name: auto-dev
+  dir: "**/dev/**"  # Any dev directory
+  workspace: dev
+  terraform_version: v1.8.5
+  delete_source_branch_on_merge: true
+  repo_locking: true
+
+  autoplan:
+    when_modified: ["**/dev/**/*.tf", "**/dev/**/*.tfvars"]
+    enabled: true
+
+  # Enhanced security for dev environments
+  apply_requirements: ["approved", "mergeable"]
+  workflow: stackkit-security-enhanced
+
+# ========================================
+# Pattern 3: Repository-specific overrides
+# ========================================
+# These specific patterns will take precedence over wildcards
+# for projects that need custom configuration
+
+- name: REPO_NAME_PLACEHOLDER-override
+  dir: gitops-atlantis
+  workspace: prod
+  terraform_version: v1.8.5
+  delete_source_branch_on_merge: true
+  repo_locking: true
+
+  autoplan:
+    when_modified: ["gitops-atlantis/**/*.tf", "gitops-atlantis/**/*.tfvars"]
+    enabled: true
+
+  # Special requirements for infrastructure management
+  apply_requirements: ["approved", "mergeable", "undiverged"]
   workflow: stackkit-enhanced
 
 # Enhanced Workflows
@@ -43,13 +121,13 @@ workflows:
           extra_args: ["-lock-timeout=10m", "-input=false"]
       - run: |
           set -e
-          
+
           # =======================================
           # StackKit Enhanced Plan Analysis
           # =======================================
-          
+
           echo "🚀 StackKit Plan Analysis Starting..."
-          
+
           # Extract repository and PR information
           REPO_ORG=$(echo "$BASE_REPO_OWNER" | tr '[:upper:]' '[:lower:]')
           REPO_NAME=$(echo "$BASE_REPO_NAME" | tr '[:upper:]' '[:lower:]')
@@ -57,7 +135,7 @@ workflows:
           COMMIT_SHA=$(echo "$HEAD_COMMIT" | cut -c1-8)
           TIMESTAMP=$(date -u +%Y%m%d%H%M%S)
           PR_URL="https://github.com/${BASE_REPO_OWNER}/${BASE_REPO_NAME}/pull/${PR_NUM}"
-          
+
           # Determine plan status
           if [ -f "$PLANFILE" ]; then
             PLAN_STATUS="succeeded"
@@ -68,36 +146,36 @@ workflows:
             PLAN_COLOR="danger"
             echo "❌ Terraform plan failed"
           fi
-          
+
           # Initialize analysis variables
           CHANGE_SUMMARY=""
           RESOURCE_COUNTS=""
           COST_INFO=""
           SECURITY_INFO=""
-          
+
           # =======================================
           # Resource Change Analysis
           # =======================================
-          
+
           if [ -n "$PLANFILE" ] && [ -f "$PLANFILE" ]; then
             echo "📊 Analyzing Terraform plan changes..."
-            
+
             # Convert plan to JSON for analysis
             if terraform show -json "$PLANFILE" > plan_analysis.json 2>/dev/null; then
               echo "✅ Plan converted to JSON successfully"
-              
+
               # Validate JSON structure
               if jq empty plan_analysis.json 2>/dev/null; then
                 echo "✅ JSON structure is valid"
-                
+
                 # Extract resource change counts
                 if jq 'has("resource_changes")' plan_analysis.json | grep -q true; then
                   ADD_COUNT=$(jq '[.resource_changes[]? | select(.change.actions[]? == "create")] | length' plan_analysis.json 2>/dev/null || echo 0)
-                  UPDATE_COUNT=$(jq '[.resource_changes[]? | select(.change.actions[]? == "update")] | length' plan_analysis.json 2>/dev/null || echo 0)  
+                  UPDATE_COUNT=$(jq '[.resource_changes[]? | select(.change.actions[]? == "update")] | length' plan_analysis.json 2>/dev/null || echo 0)
                   DELETE_COUNT=$(jq '[.resource_changes[]? | select(.change.actions[]? == "delete")] | length' plan_analysis.json 2>/dev/null || echo 0)
-                  
+
                   TOTAL_CHANGES=$((ADD_COUNT + UPDATE_COUNT + DELETE_COUNT))
-                  
+
                   if [ $TOTAL_CHANGES -gt 0 ]; then
                     RESOURCE_COUNTS="📈 *Changes*: +${ADD_COUNT} ~${UPDATE_COUNT} -${DELETE_COUNT}"
                     CHANGE_SUMMARY="Total ${TOTAL_CHANGES} resource changes planned"
@@ -122,31 +200,31 @@ workflows:
             echo "❌ Plan file not found for analysis"
             RESOURCE_COUNTS="❌ *Error*: Plan file not available"
           fi
-          
+
           # =======================================
           # Infracost Analysis
           # =======================================
-          
+
           echo "💰 Starting Infracost analysis..."
-          
+
           if [ -n "$INFRACOST_API_KEY" ] && command -v infracost >/dev/null 2>&1 && [ -f "$PLANFILE" ]; then
             echo "🔧 Configuring Infracost..."
-            
+
             # Configure Infracost API key
             if infracost configure set api_key "$INFRACOST_API_KEY" >/dev/null 2>&1; then
               echo "✅ Infracost API key configured"
-              
+
               # Run cost analysis
               echo "📊 Running cost breakdown analysis..."
-              
+
               # Use directory-based analysis for better compatibility
               if COST_JSON=$(infracost breakdown --path . --format json 2>/dev/null); then
                 echo "✅ Cost analysis completed"
-                
+
                 # Extract monthly cost
                 if echo "$COST_JSON" | jq empty 2>/dev/null; then
                   MONTHLY_COST=$(echo "$COST_JSON" | jq -r '.totalMonthlyCost // "0"' 2>/dev/null || echo "0")
-                  
+
                   if [ "$MONTHLY_COST" != "null" ] && [ "$MONTHLY_COST" != "0" ]; then
                     COST_INFO="💰 *Estimated Monthly Cost*: \$${MONTHLY_COST}"
                     echo "💰 Monthly cost estimate: \$${MONTHLY_COST}"
@@ -158,7 +236,7 @@ workflows:
                   echo "❌ Invalid cost analysis JSON"
                   COST_INFO="⚠️ *Cost*: Analysis could not be parsed"
                 fi
-                
+
                 # Generate Infracost comment (optional)
                 if [ "$MONTHLY_COST" != "0" ] && [ "$MONTHLY_COST" != "null" ]; then
                   echo "📝 Generating Infracost comment..."
@@ -187,21 +265,21 @@ workflows:
             fi
             COST_INFO="ℹ️ *Cost*: Analysis not configured"
           fi
-          
+
           # =======================================
           # Security Analysis (Basic)
           # =======================================
-          
+
           echo "🛡️ Running security checks..."
-          
+
           # Check for common security issues in plan
           if [ -f "plan_analysis.json" ]; then
             # Check for public access
             PUBLIC_RESOURCES=$(jq '[.resource_changes[]? | select(.change.after.acl? == "public-read" or .change.after.public_access_block?.block_public_acls? == false)] | length' plan_analysis.json 2>/dev/null || echo 0)
-            
+
             # Check for unencrypted resources
             UNENCRYPTED_RESOURCES=$(jq '[.resource_changes[]? | select(.change.after.encryption? == null or .change.after.server_side_encryption? == null)] | length' plan_analysis.json 2>/dev/null || echo 0)
-            
+
             if [ "$PUBLIC_RESOURCES" -gt 0 ] || [ "$UNENCRYPTED_RESOURCES" -gt 0 ]; then
               SECURITY_INFO="⚠️ *Security*: Review required (${PUBLIC_RESOURCES} public, ${UNENCRYPTED_RESOURCES} unencrypted)"
               echo "⚠️ Security review needed: ${PUBLIC_RESOURCES} public resources, ${UNENCRYPTED_RESOURCES} potentially unencrypted"
@@ -212,14 +290,14 @@ workflows:
           else
             SECURITY_INFO="ℹ️ *Security*: Analysis not available"
           fi
-          
+
           # =======================================
           # Slack Notification
           # =======================================
-          
+
           if [ -n "$SLACK_WEBHOOK_URL" ]; then
             echo "📨 Sending Slack notification..."
-            
+
             # Create comprehensive Slack message
             SLACK_MESSAGE=$(cat << EOF
           {
@@ -239,7 +317,7 @@ workflows:
                     "text": "*Repository*: ${REPO_ORG}/${REPO_NAME}"
                   },
                   {
-                    "type": "mrkdwn", 
+                    "type": "mrkdwn",
                     "text": "*PR*: <${PR_URL}|#${PR_NUM}>"
                   },
                   {
@@ -260,7 +338,7 @@ workflows:
                 }
               },
               {
-                "type": "section", 
+                "type": "section",
                 "text": {
                   "type": "mrkdwn",
                   "text": "${COST_INFO}"
@@ -269,7 +347,7 @@ workflows:
               {
                 "type": "section",
                 "text": {
-                  "type": "mrkdwn", 
+                  "type": "mrkdwn",
                   "text": "${SECURITY_INFO}"
                 }
               },
@@ -286,7 +364,7 @@ workflows:
           }
           EOF
             )
-            
+
             # Send notification
             if curl -X POST -H 'Content-type: application/json' \
                  --data "$SLACK_MESSAGE" \
@@ -298,10 +376,10 @@ workflows:
           else
             echo "ℹ️ Slack notification skipped (SLACK_WEBHOOK_URL not set)"
           fi
-          
+
           # Cleanup
           rm -f plan_analysis.json 2>/dev/null || true
-          
+
           echo "🚀 StackKit Plan Analysis Complete!"
 
     apply:
@@ -313,9 +391,9 @@ workflows:
           extra_args: ["-auto-approve", "-input=false"]
       - run: |
           set -e
-          
+
           echo "🚀 StackKit Apply Complete!"
-          
+
           # Send apply success notification
           if [ -n "$SLACK_WEBHOOK_URL" ]; then
             REPO_ORG=$(echo "$BASE_REPO_OWNER" | tr '[:upper:]' '[:lower:]')
@@ -323,12 +401,12 @@ workflows:
             PR_NUM=$PULL_NUM
             PR_URL="https://github.com/${BASE_REPO_OWNER}/${BASE_REPO_NAME}/pull/${PR_NUM}"
             TIMESTAMP=$(date -u +%Y%m%d%H%M%S)
-            
+
             APPLY_MESSAGE=$(cat << EOF
           {
             "blocks": [
               {
-                "type": "header", 
+                "type": "header",
                 "text": {
                   "type": "plain_text",
                   "text": "✅ StackKit Apply Successful"
@@ -351,7 +429,7 @@ workflows:
                 "type": "context",
                 "elements": [
                   {
-                    "type": "mrkdwn", 
+                    "type": "mrkdwn",
                     "text": "🤖 StackKit Atlantis • ${TIMESTAMP}"
                   }
                 ]
@@ -360,7 +438,196 @@ workflows:
           }
           EOF
             )
-            
+
+            curl -X POST -H 'Content-type: application/json' \
+                 --data "$APPLY_MESSAGE" \
+                 "$SLACK_WEBHOOK_URL" >/dev/null 2>&1 || echo "Failed to send apply notification"
+          fi
+
+  # 보안 강화 워크플로우 (개발 환경용)
+  stackkit-security-enhanced:
+    plan:
+      steps:
+      - env:
+          name: TF_IN_AUTOMATION
+          value: "true"
+      # 보안 사전 검증
+      - run: |
+          echo "🛡️ 보안 사전 검증 시작..."
+
+          # 1. 애플리케이션 코드 포함 여부 검증
+          echo "🔍 애플리케이션 코드 혼입 검사..."
+
+          APP_PATTERNS=(
+            "setof-admin-api/"
+            "setof-client-api/"
+            "src/"
+            "*.java"
+            "*.js"
+            "*.ts"
+            "package.json"
+            "pom.xml"
+          )
+
+          # PR에서 변경된 파일 확인
+          if [ -n "$HEAD_COMMIT" ] && [ -n "$BASE_COMMIT" ]; then
+            git fetch origin $BASE_COMMIT
+            CHANGED_FILES=$(git diff --name-only $BASE_COMMIT..$HEAD_COMMIT || echo "")
+
+            APP_FILES_FOUND=""
+            for file in $CHANGED_FILES; do
+              for pattern in "${APP_PATTERNS[@]}"; do
+                if [[ "$file" == *"$pattern"* ]]; then
+                  APP_FILES_FOUND="$APP_FILES_FOUND\n- $file"
+                  break
+                fi
+              done
+            done
+
+            if [ -n "$APP_FILES_FOUND" ]; then
+              echo "🚨 경고: 애플리케이션 코드가 인프라 PR에 포함됨:"
+              echo -e "$APP_FILES_FOUND"
+              echo "⚠️ 보안 검토가 필요합니다."
+
+              # Slack 긴급 알림
+              if [ -n "$SLACK_WEBHOOK_URL" ]; then
+                curl -X POST -H 'Content-type: application/json' \
+                  --data "{\"text\":\"🚨 보안 경고: PR #${PULL_NUM}에 애플리케이션 코드가 인프라 변경과 함께 포함됨\n변경된 앱 파일:${APP_FILES_FOUND}\n즉시 검토 필요!\"}" \
+                  "$SLACK_WEBHOOK_URL" || echo "Failed to send security alert"
+              fi
+            fi
+          fi
+
+          echo "✅ 보안 사전 검증 완료"
+
+      - init:
+          extra_args: ["-upgrade"]
+      - plan:
+          extra_args: ["-lock-timeout=10m", "-input=false"]
+
+      # 기존 StackKit 분석 실행 (간소화 버전)
+      - run: |
+          set -e
+
+          echo "🚀 StackKit Plan Analysis Starting..."
+
+          # Extract repository and PR information
+          REPO_ORG=$(echo "$BASE_REPO_OWNER" | tr '[:upper:]' '[:lower:]')
+          REPO_NAME=$(echo "$BASE_REPO_NAME" | tr '[:upper:]' '[:lower:]')
+          PR_NUM=$PULL_NUM
+          COMMIT_SHA=$(echo "$HEAD_COMMIT" | cut -c1-8)
+          TIMESTAMP=$(date -u +%Y%m%d%H%M%S)
+          PR_URL="https://github.com/${BASE_REPO_OWNER}/${BASE_REPO_NAME}/pull/${PR_NUM}"
+
+          # Determine plan status
+          if [ -f "$PLANFILE" ]; then
+            PLAN_STATUS="succeeded"
+            echo "✅ Terraform plan succeeded"
+          else
+            PLAN_STATUS="failed"
+            echo "❌ Terraform plan failed"
+          fi
+
+          # Basic resource analysis
+          RESOURCE_COUNTS=""
+          if [ -n "$PLANFILE" ] && [ -f "$PLANFILE" ]; then
+            if terraform show -json "$PLANFILE" > plan_analysis.json 2>/dev/null; then
+              if jq empty plan_analysis.json 2>/dev/null; then
+                if jq 'has("resource_changes")' plan_analysis.json | grep -q true; then
+                  ADD_COUNT=$(jq '[.resource_changes[]? | select(.change.actions[]? == "create")] | length' plan_analysis.json 2>/dev/null || echo 0)
+                  UPDATE_COUNT=$(jq '[.resource_changes[]? | select(.change.actions[]? == "update")] | length' plan_analysis.json 2>/dev/null || echo 0)
+                  DELETE_COUNT=$(jq '[.resource_changes[]? | select(.change.actions[]? == "delete")] | length' plan_analysis.json 2>/dev/null || echo 0)
+
+                  TOTAL_CHANGES=$((ADD_COUNT + UPDATE_COUNT + DELETE_COUNT))
+
+                  if [ $TOTAL_CHANGES -gt 0 ]; then
+                    RESOURCE_COUNTS="📈 *Changes*: +${ADD_COUNT} ~${UPDATE_COUNT} -${DELETE_COUNT}"
+                    echo "📊 Resource changes: +${ADD_COUNT} ~${UPDATE_COUNT} -${DELETE_COUNT}"
+                  else
+                    RESOURCE_COUNTS="✅ *No Changes*: Infrastructure matches desired state"
+                    echo "✅ No infrastructure changes detected"
+                  fi
+                fi
+              fi
+            fi
+          fi
+
+          # Cleanup
+          rm -f plan_analysis.json 2>/dev/null || true
+
+          echo "🚀 StackKit Plan Analysis Complete!"
+
+    apply:
+      steps:
+      # 최종 보안 검증
+      - run: |
+          echo "🛡️ Apply 전 최종 보안 검증..."
+
+          # 1. PR 승인자 확인
+          if [ -n "$PULL_NUM" ] && [ -n "$BASE_REPO_OWNER" ] && [ -n "$BASE_REPO_NAME" ]; then
+            REVIEWERS=$(curl -s -H "Authorization: token $ATLANTIS_GH_TOKEN" \
+              "https://api.github.com/repos/$BASE_REPO_OWNER/$BASE_REPO_NAME/pulls/$PULL_NUM/reviews" \
+              | jq -r '.[] | select(.state=="APPROVED") | .user.login' | sort | uniq)
+
+            REVIEW_COUNT=$(echo "$REVIEWERS" | wc -l | tr -d ' ')
+
+            echo "📋 승인된 리뷰어: $REVIEWERS"
+            echo "📊 승인 개수: $REVIEW_COUNT"
+
+            if [ $REVIEW_COUNT -lt 2 ]; then
+              echo "🚨 오류: 최소 2명의 승인이 필요합니다 (현재: $REVIEW_COUNT명)"
+              exit 1
+            fi
+          fi
+
+          echo "✅ 최종 보안 검증 완료"
+
+      - env:
+          name: TF_IN_AUTOMATION
+          value: "true"
+      - apply:
+          extra_args: ["-auto-approve", "-input=false"]
+      - run: |
+          set -e
+
+          echo "🚀 StackKit Apply Complete!"
+
+          # Send apply success notification
+          if [ -n "$SLACK_WEBHOOK_URL" ]; then
+            REPO_ORG=$(echo "$BASE_REPO_OWNER" | tr '[:upper:]' '[:lower:]')
+            REPO_NAME=$(echo "$BASE_REPO_NAME" | tr '[:upper:]' '[:lower:]')
+            PR_NUM=$PULL_NUM
+            PR_URL="https://github.com/${BASE_REPO_OWNER}/${BASE_REPO_NAME}/pull/${PR_NUM}"
+            TIMESTAMP=$(date -u +%Y%m%d%H%M%S)
+
+            APPLY_MESSAGE=$(cat << EOF
+          {
+            "blocks": [
+              {
+                "type": "header",
+                "text": {
+                  "type": "plain_text",
+                  "text": "✅ StackKit Apply Successful (Security Enhanced)"
+                }
+              },
+              {
+                "type": "section",
+                "fields": [
+                  {
+                    "type": "mrkdwn",
+                    "text": "*Repository*: ${REPO_ORG}/${REPO_NAME}"
+                  },
+                  {
+                    "type": "mrkdwn",
+                    "text": "*PR*: <${PR_URL}|#${PR_NUM}>"
+                  }
+                ]
+              }
+            ]
+          }
+          EOF
+            )
+
             curl -X POST -H 'Content-type: application/json' \
                  --data "$APPLY_MESSAGE" \
                  "$SLACK_WEBHOOK_URL" >/dev/null 2>&1 || echo "Failed to send apply notification"

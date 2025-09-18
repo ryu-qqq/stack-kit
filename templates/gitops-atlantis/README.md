@@ -1,225 +1,203 @@
-# PROJECT_NAME_PLACEHOLDER Infrastructure
+# GitOps Atlantis MVP Template
 
-Infrastructure as Code for the PROJECT_NAME_PLACEHOLDER project using StackKit v2 GitOps Atlantis template.
+A simplified, production-ready GitOps infrastructure template using Atlantis for Terraform automation.
 
-## Project Information
-- **Team**: TEAM_NAME_PLACEHOLDER
-- **Organization**: ORG_NAME_PLACEHOLDER
-- **Template**: gitops-atlantis
-- **Environments**: dev,staging,prod
+## 🎯 Template Overview
 
-## Quick Start
+This MVP template provides a streamlined GitOps setup with:
+- **Atlantis** for Terraform automation via pull requests
+- **AWS ECS Fargate** for container orchestration
+- **GitHub Actions** with OIDC authentication
+- **Application Load Balancer** with health checks
+- **ECR** for container image management
+- **CloudWatch** for logging and monitoring
 
-```bash
-# Validate configuration
-terraform validate
+## 📋 Prerequisites
 
-# Plan changes
-terraform plan -var-file=terraform.tfvars.example
+1. **AWS Account** with administrative access
+2. **GitHub Repository** for your infrastructure code
+3. **Domain** for Atlantis web interface (optional but recommended)
+4. **GitHub Token** with repository access permissions
 
-# Apply changes (via Atlantis in production)
-terraform apply -var-file=terraform.tfvars.example
-```
+## 🔧 Setup Instructions
 
-## Directory Structure
+### 1. Replace Placeholders
 
-```
-.
-├── atlantis.yaml             # Atlantis configuration with enhanced features
-├── terraform.tfvars.example  # Example variables configuration
-├── variables.tf              # Variable definitions (47+ StackKit standard variables)
-├── locals.tf                 # Computed local values
-├── main.tf                   # Provider configuration
-├── data.tf                   # Data sources
-├── networking.tf             # VPC, subnets, security groups
-├── security.tf               # IAM roles, policies, secrets
-├── compute.tf                # ECS cluster, services, auto-scaling
-├── load_balancer.tf          # ALB, target groups, listeners
-├── storage.tf                # EFS, S3, DynamoDB
-├── outputs.tf                # Output values
-├── environments/             # Environment-specific configurations
-│   ├── dev/
-│   ├── staging/
-│   └── prod/
-└── scripts/
-    └── connect.sh            # Repository connection script
-```
-
-## StackKit GitOps Atlantis Features
-
-This template includes enhanced Atlantis configuration with enterprise-grade features:
-
-### 🔍 Enhanced Analysis
-- **Resource Change Analysis** - Detailed plan analysis with resource counts
-- **Cost Impact Assessment** - Infracost integration for monthly cost estimation
-- **Security Validation** - Automated checks for common security issues
-- **Rich Reporting** - Comprehensive logging and debugging information
-
-### 💬 Communication & Notifications
-- **Slack Integration** - Rich notifications with structured messages
-- **GitHub Comments** - Automated Infracost cost breakdown comments
-- **Status Updates** - Real-time plan and apply status notifications
-- **Error Reporting** - Detailed error information with debugging context
-
-### 🛡️ Security & Governance
-- **Manual Approval** - Required approval before infrastructure changes
-- **Branch Protection** - Configured webhook events for safe operations
-- **Secret Management** - Secure webhook secret handling
-- **Audit Trail** - Complete tracking of infrastructure changes
-
-## Repository Connection
-
-To connect this repository to your Atlantis server, use the included connection script:
+Run the placeholder replacement script to customize for your environment:
 
 ```bash
-# Basic connection
-./scripts/connect.sh \
-  --atlantis-url https://atlantis.your-company.com \
-  --repo-name ORG_NAME_PLACEHOLDER/PROJECT_NAME_PLACEHOLDER \
-  --github-token ghp_your_token
+# Update placeholders in the script first
+vim replace-placeholders.sh
 
-# Full featured connection with notifications and cost analysis
-./scripts/connect.sh \
-  --atlantis-url https://atlantis.your-company.com \
-  --repo-name ORG_NAME_PLACEHOLDER/PROJECT_NAME_PLACEHOLDER \
-  --github-token ghp_your_token \
-  --slack-webhook https://hooks.slack.com/services/YOUR/SLACK/WEBHOOK \
-  --infracost-key ico_your_infracost_key \
-  --environment prod
+# Execute replacement
+./replace-placeholders.sh
 ```
 
-The connection script will automatically:
-- ✅ **Setup GitHub Webhooks** - Configure repository webhooks for Atlantis events
-- ✅ **Configure Repository Variables** - Set GitHub repository variables for integrations
-- ✅ **Update Project Settings** - Customize atlantis.yaml for your project
-- ✅ **Verify Configuration** - Validate StackKit project structure
+### 2. Required Placeholder Values
 
-## Atlantis Workflow
+| Placeholder | Description | Example |
+|-------------|-------------|---------|
+| `ACCOUNT_ID_PLACEHOLDER` | Your AWS Account ID | `123456789012` |
+| `ORG_NAME_PLACEHOLDER` | Your organization name | `mycompany` |
+| `PROJECT_NAME_PLACEHOLDER` | Your project name | `myproject-atlantis` |
+| `REPO_NAME_PLACEHOLDER` | Your repository name | `infrastructure` |
+| `GITHUB_USER_PLACEHOLDER` | Your GitHub username | `myusername` |
+| `OWNER_EMAIL_PLACEHOLDER` | Infrastructure owner email | `ops@mycompany.com` |
+| `VPC_ID_PLACEHOLDER` | Your VPC ID | `vpc-abc123def` |
+| `SUBNET_ID_PLACEHOLDER` | Your subnet IDs | `subnet-abc123,subnet-def456` |
+| `TERRAFORM_STATE_BUCKET_PLACEHOLDER` | S3 bucket for Terraform state | `mycompany-terraform-state-bucket` |
+| `ECR_REPOSITORY_PLACEHOLDER` | ECR repository URL | `123456789012.dkr.ecr.us-east-1.amazonaws.com/mycompany/atlantis` |
+| `ALB_DNS_PLACEHOLDER` | ALB DNS name | `myproject-alb-123456789.us-east-1.elb.amazonaws.com` |
+| `EFS_ID_PLACEHOLDER` | EFS file system ID | `fs-abc123def` |
+| `CERTIFICATE_ARN_PLACEHOLDER` | SSL certificate ARN | `arn:aws:acm:us-east-1:123456789012:certificate/abc123def` |
+| `SLACK_WEBHOOK_URL_PLACEHOLDER` | Slack webhook URL | `https://hooks.slack.com/services/T00000000/B00000000/XXXXXXXXXXXXXXXXXXXXXXXX` |
 
-### 1. Development Workflow
-1. **Create Feature Branch**: `git checkout -b feature/your-feature`
-2. **Modify Infrastructure**: Update `.tf` files as needed
-3. **Create Pull Request**: Atlantis automatically runs `terraform plan`
-4. **Review Changes**: Review plan output, cost analysis, and security checks
-5. **Approve PR**: Get team approval for infrastructure changes
-6. **Apply Changes**: Run `atlantis apply` to deploy infrastructure
+### 3. Infrastructure Components
 
-### 2. Notifications & Monitoring
-- **Plan Notifications**: Slack alerts with resource counts and cost estimates
-- **Apply Notifications**: Success/failure notifications with deployment details
-- **Cost Tracking**: Infracost integration provides cost impact for every change
-- **Security Alerts**: Automated warnings for potential security issues
+The template includes:
 
-### 3. Available Commands
-```bash
-# Plan infrastructure changes
-atlantis plan
+- **ECS Cluster**: Fargate-based container orchestration
+- **Application Load Balancer**: Public-facing load balancer with health checks
+- **Security Groups**: Properly configured network security
+- **CloudWatch**: Comprehensive logging and monitoring
+- **ECR Repository**: Container image storage with lifecycle policies
+- **GitHub Actions**: Automated deployment pipeline
 
-# Apply approved changes  
-atlantis apply
+### 4. Deployment Steps
 
-# Unlock repository if needed
-atlantis unlock
+1. **Prepare AWS Infrastructure**:
+   ```bash
+   # Create S3 bucket for Terraform state
+   aws s3 mb s3://TERRAFORM_STATE_BUCKET_PLACEHOLDER
 
-# Get help
-atlantis help
+   # Create ECR repository
+   aws ecr create-repository --repository-name ORG_NAME_PLACEHOLDER/atlantis
+   ```
+
+2. **Configure GitHub Secrets**:
+   - `AWS_ACCOUNT_ID`: Your AWS account ID
+   - `AWS_REGION`: Your preferred AWS region
+   - `ATLANTIS_GITHUB_TOKEN`: GitHub token for Atlantis
+
+3. **Deploy Infrastructure**:
+   ```bash
+   # Initialize Terraform
+   terraform init
+
+   # Plan deployment
+   terraform plan
+
+   # Apply infrastructure
+   terraform apply
+   ```
+
+4. **Deploy Atlantis Container**:
+   - Push changes to main branch
+   - GitHub Actions will build and deploy automatically
+
+### 5. Configuration
+
+#### Atlantis Configuration (`atlantis.yaml`)
+```yaml
+version: 3
+projects:
+- name: infrastructure
+  dir: .
+  terraform_version: v1.5.0
+  autoplan:
+    when_modified: ["*.tf", "*.tfvars"]
+  apply_requirements: ["approved", "mergeable"]
 ```
 
-## Configuration
+#### Environment Variables
+Key environment variables configured in ECS:
+- `ATLANTIS_GITHUB_USER`: GitHub username
+- `ATLANTIS_GITHUB_TOKEN`: GitHub token
+- `ATLANTIS_REPO_ALLOWLIST`: Allowed repositories
+- `ATLANTIS_ATLANTIS_URL`: Atlantis web interface URL
 
-### Required Environment Variables (Atlantis Server)
-```bash
-# GitHub Integration
-ATLANTIS_GH_TOKEN=ghp_your_github_token_with_repo_access
+## 🔒 Security Features
 
-# Optional: Enhanced Features
-SLACK_WEBHOOK_URL=https://hooks.slack.com/services/YOUR/SLACK/WEBHOOK
-INFRACOST_API_KEY=ico_your_infracost_api_key
-```
+- **OIDC Authentication**: Passwordless GitHub Actions authentication
+- **IAM Roles**: Principle of least privilege
+- **Security Groups**: Restricted network access
+- **Private Subnets**: ECS tasks run in private subnets
+- **Secrets Management**: Sensitive data stored in AWS Secrets Manager
 
-### Project Variables (Set by connect.sh)
-These are automatically configured by the connection script:
-- `ATLANTIS_WEBHOOK_SECRET` - Secure webhook authentication
-- `AWS_REGION` - Target AWS region for deployment
-- `PROJECT_NAME` - Project identifier for resources
-- `ENVIRONMENT` - Target environment (dev/staging/prod)
-- `SLACK_WEBHOOK_URL` - Slack notifications endpoint (if provided)
-- `INFRACOST_API_KEY` - Cost analysis API key (if provided)
+## 💰 Cost Estimation
 
-## Customization
+Estimated monthly costs:
+- **ECS Fargate**: $15-25 (0.25 vCPU, 0.5 GB RAM)
+- **Application Load Balancer**: $16
+- **CloudWatch Logs**: $1-3
+- **ECR Storage**: $0.10/GB
+- **Data Transfer**: $2-5
 
-### Terraform Variables
-Update `terraform.tfvars.example` with your project-specific values:
-```hcl
-# Project Metadata
-project_name = "PROJECT_NAME_PLACEHOLDER"
-team         = "TEAM_NAME_PLACEHOLDER" 
-organization = "ORG_NAME_PLACEHOLDER"
-environment  = "prod"
+**Total**: ~$35-55/month
 
-# AWS Configuration
-aws_region = "REGION_PLACEHOLDER"
+## 🔧 Customization
 
-# Atlantis Configuration  
-atlantis_host = "atlantis.ORG_NAME_PLACEHOLDER.com"
-atlantis_repo_allowlist = "github.com/ORG_NAME_PLACEHOLDER/*"
-```
+### Scaling Configuration
+Modify `ecs.tf` to adjust:
+- CPU and memory allocation
+- Auto-scaling parameters
+- Health check settings
 
-### Atlantis Configuration
-The `atlantis.yaml` file includes the `stackkit-enhanced` workflow with:
-- Enhanced plan analysis with resource counting
-- Infracost integration for cost estimation
-- Basic security validation
-- Slack notifications with rich formatting
-- Automatic cleanup of temporary files
-- Comprehensive error handling
+### Monitoring Enhancement
+Add custom CloudWatch alarms in `monitoring.tf`:
+- Memory utilization alerts
+- Error rate monitoring
+- Custom application metrics
 
-## Troubleshooting
+### Security Hardening
+Additional security measures:
+- WAF integration
+- VPC Flow Logs
+- GuardDuty enablement
+
+## 📊 Monitoring & Troubleshooting
+
+### Health Checks
+- **ALB Health Check**: `/healthz` endpoint
+- **ECS Health Check**: Container health monitoring
+- **CloudWatch Metrics**: CPU, memory, network utilization
 
 ### Common Issues
-1. **Webhook Not Triggering**
-   - Verify webhook URL is accessible from GitHub
-   - Check webhook secret matches in both GitHub and Atlantis
-   - Ensure GitHub token has `repo` permissions
+1. **Deployment Failures**: Check CloudWatch logs
+2. **Health Check Failures**: Verify application startup
+3. **GitHub Integration**: Validate webhook configuration
 
-2. **Plan Failures** 
-   - Check AWS credentials and permissions
-   - Verify Terraform backend configuration
-   - Review variable validation errors
-
-3. **Cost Analysis Missing**
-   - Verify `INFRACOST_API_KEY` is set correctly
-   - Check infracost binary is available in Atlantis container
-   - Review infracost configuration and API limits
-
-4. **Slack Notifications Not Working**
-   - Verify `SLACK_WEBHOOK_URL` is correct
-   - Test webhook URL manually with curl
-   - Check Slack app permissions
-
-### Debug Mode
-Enable verbose logging by setting environment variables:
+### Useful Commands
 ```bash
-# In Atlantis server configuration
-ATLANTIS_LOG_LEVEL=debug
-TF_LOG=DEBUG
+# Check ECS service status
+aws ecs describe-services --cluster ENV_PLACEHOLDER-PROJECT_NAME_PLACEHOLDER-cluster --services ENV_PLACEHOLDER-PROJECT_NAME_PLACEHOLDER-service
+
+# View logs
+aws logs tail /ecs/ENV_PLACEHOLDER-PROJECT_NAME_PLACEHOLDER --follow
+
+# Restart service
+aws ecs update-service --cluster ENV_PLACEHOLDER-PROJECT_NAME_PLACEHOLDER-cluster --service ENV_PLACEHOLDER-PROJECT_NAME_PLACEHOLDER-service --force-new-deployment
 ```
 
-## Documentation
+## 🚀 Next Steps
 
-- [StackKit v2 Documentation](https://github.com/company/stackkit-terraform-modules)
-- [Atlantis Documentation](https://www.runatlantis.io/)
-- [Infracost Documentation](https://www.infracost.io/docs/)
-- [Terraform AWS Provider](https://registry.terraform.io/providers/hashicorp/aws/latest)
+After deployment:
+1. Configure domain and SSL certificate
+2. Set up Slack notifications
+3. Add monitoring dashboards
+4. Configure backup procedures
+5. Document team runbooks
 
-## Support
+## 📞 Support
 
-For issues and questions:
-- 📚 [StackKit Documentation](https://github.com/company/stackkit-terraform-modules)
-- 🐛 [Report Issues](https://github.com/company/stackkit-terraform-modules/issues)
-- 💬 Team Slack: #infrastructure
+For template issues or questions:
+- Review CloudWatch logs for deployment errors
+- Check GitHub Actions for CI/CD issues
+- Validate AWS IAM permissions
+- Consult Atlantis documentation for GitOps workflows
 
 ---
 
-Generated by StackKit v2 CLI with Enhanced GitOps Atlantis Template
-🚀 Enterprise-ready infrastructure automation with cost analysis and notifications
+**Template Version**: MVP 1.0
+**Last Updated**: 2025-09-19
+**Terraform Version**: >= 1.5.0
